@@ -15,17 +15,17 @@ PROJECT_DIR = os.path.dirname(
 
 AUTH_FILE = os.path.join(
     PROJECT_DIR,
-    "auth.json"
+    "auth.json",
 )
 
 KKM_FILE = os.path.join(
     PROJECT_DIR,
-    "kkm_daily.csv"
+    "kkm_daily.csv",
 )
 
 OUTPUT_FILE = os.path.join(
     PROJECT_DIR,
-    "sales_sources_daily.csv"
+    "sales_sources_daily.csv",
 )
 
 SALES_REPORT_URL = (
@@ -48,22 +48,20 @@ EXTERNAL_PAGE_PARAM = (
     "ExternalOrderForm_page"
 )
 
-# Источник №2 пока оставляем только
-# для собственных заказов Мокрого носа.
+# Источник №2 пока используем только
+# для собственных интернет-заказов Мокрого носа.
 SELF_PICKUP_SOURCE_ID = "2"
 
 PAGE_SIZE = 50
 
 
 def clean(text):
-
     return " ".join(
         (text or "").split()
     )
 
 
 def parse_money(text):
-
     text = (
         clean(text)
         .replace("\xa0", "")
@@ -72,24 +70,19 @@ def parse_money(text):
     )
 
     if not text:
-
         return 0.0
 
     try:
-
         return float(text)
 
     except ValueError:
-
         return 0.0
 
 
 def get_latest_closed_date():
-
     if not os.path.exists(
         KKM_FILE
     ):
-
         return (
             datetime.now()
             - timedelta(days=1)
@@ -103,15 +96,12 @@ def get_latest_closed_date():
         encoding="utf-8-sig",
         newline="",
     ) as file:
-
         reader = csv.DictReader(
             file
         )
 
         for row in reader:
-
             try:
-
                 date = datetime.strptime(
                     row["date"],
                     "%d.%m.%Y",
@@ -122,11 +112,9 @@ def get_latest_closed_date():
                 )
 
             except Exception:
-
                 pass
 
     if not dates:
-
         return (
             datetime.now()
             - timedelta(days=1)
@@ -138,7 +126,6 @@ def get_latest_closed_date():
 
 
 def get_total_row_values(page):
-
     rows = page.locator(
         "table tr"
     )
@@ -146,7 +133,6 @@ def get_total_row_values(page):
     for i in range(
         rows.count()
     ):
-
         cells = (
             rows
             .nth(i)
@@ -156,7 +142,6 @@ def get_total_row_values(page):
         )
 
         if cells.count() < 2:
-
             continue
 
         values = [
@@ -171,11 +156,9 @@ def get_total_row_values(page):
         ]
 
         if not values:
-
             continue
 
         if values[0] != "Итого":
-
             continue
 
         return values
@@ -188,7 +171,6 @@ def fetch_self_pickup_amounts(
     start_date,
     end_date,
 ):
-
     date_range = (
         start_date.strftime(
             "%d.%m.%Y"
@@ -243,7 +225,6 @@ def fetch_self_pickup_amounts(
     )
 
     if "/login" in page.url:
-
         raise RuntimeError(
             "CRM отправила на login"
         )
@@ -258,7 +239,6 @@ def fetch_self_pickup_amounts(
     )
 
     if values is None:
-
         return [
             0.0
             for _ in range(
@@ -275,7 +255,6 @@ def fetch_self_pickup_amounts(
     ]
 
     while len(result) < day_count:
-
         result.append(
             0.0
         )
@@ -288,13 +267,23 @@ def build_external_orders_url(
     end_date,
     page_number,
 ):
+    # В CRM обнаружен баг фильтра createdAt:
+    # при конечной дате 17.08 заказ 17.08 в 20:27
+    # не попадал в выдачу.
+    #
+    # Поэтому серверу запрашиваем один дополнительный день,
+    # а реальную границу периода применяем локально ниже.
+    query_end_date = (
+        end_date
+        + timedelta(days=1)
+    )
 
     date_range = (
         start_date.strftime(
             "%d.%m.%Y"
         )
         + " - "
-        + end_date.strftime(
+        + query_end_date.strftime(
             "%d.%m.%Y"
         )
     )
@@ -307,7 +296,6 @@ def build_external_orders_url(
     ]
 
     if page_number > 1:
-
         params.append(
             (
                 EXTERNAL_PAGE_PARAM,
@@ -325,7 +313,6 @@ def build_external_orders_url(
 def parse_external_order_rows(
     page,
 ):
-
     result = []
 
     rows = page.locator(
@@ -335,7 +322,6 @@ def parse_external_order_rows(
     for i in range(
         rows.count()
     ):
-
         cells = (
             rows
             .nth(i)
@@ -357,15 +343,12 @@ def parse_external_order_rows(
             len(values) >= 8
             and not values[0]
         ):
-
             values = values[1:]
 
         if len(values) < 7:
-
             continue
 
         try:
-
             order_datetime = (
                 datetime.strptime(
                     values[0],
@@ -374,7 +357,6 @@ def parse_external_order_rows(
             )
 
         except ValueError:
-
             continue
 
         result.append(
@@ -413,21 +395,18 @@ def parse_external_order_rows(
 def classify_platform(
     platform,
 ):
-
     value = (
         clean(platform)
         .lower()
     )
 
     if "купер" in value:
-
         return "kuper"
 
     if (
         "яндекс" in value
         or "delivery club" in value
     ):
-
         return "yandex_food"
 
     return "other"
@@ -438,16 +417,14 @@ def fetch_external_orders(
     start_date,
     end_date,
 ):
-
     all_orders = []
-
     seen_numbers = set()
+    previous_page_numbers = None
 
     for page_number in range(
         1,
         101,
     ):
-
         target_url = (
             build_external_orders_url(
                 start_date,
@@ -463,7 +440,6 @@ def fetch_external_orders(
         )
 
         if "/login" in page.url:
-
             raise RuntimeError(
                 "CRM отправила на login"
             )
@@ -475,19 +451,35 @@ def fetch_external_orders(
         )
 
         if not page_rows:
-
             break
+
+        page_numbers = tuple(
+            order["number"]
+            for order in page_rows
+        )
+
+        if (
+            previous_page_numbers is not None
+            and page_numbers
+            == previous_page_numbers
+        ):
+            break
+
+        previous_page_numbers = (
+            page_numbers
+        )
 
         new_rows = []
 
         for order in page_rows:
-
+            # Это реальная граница периода.
+            # Дополнительный день нужен только
+            # для обхода бага серверного фильтра CRM.
             if not (
                 start_date
                 <= order["date"]
                 <= end_date
             ):
-
                 continue
 
             number = (
@@ -495,7 +487,6 @@ def fetch_external_orders(
             )
 
             if number in seen_numbers:
-
                 continue
 
             seen_numbers.add(
@@ -506,10 +497,6 @@ def fetch_external_orders(
                 order
             )
 
-        if not new_rows:
-
-            break
-
         all_orders.extend(
             new_rows
         )
@@ -518,7 +505,6 @@ def fetch_external_orders(
             len(page_rows)
             < PAGE_SIZE
         ):
-
             break
 
     return all_orders
@@ -527,7 +513,6 @@ def fetch_external_orders(
 def aggregate_orders(
     orders,
 ):
-
     daily = defaultdict(
         lambda: {
             "yandex_orders": 0,
@@ -543,31 +528,24 @@ def aggregate_orders(
     )
 
     delivered = []
-
     cancelled = []
-
     ignored = []
 
     for order in orders:
-
         status = (
             order["status"]
         )
 
         if status == "Отменен":
-
             cancelled.append(
                 order
             )
-
             continue
 
         if status != "Доставлен":
-
             ignored.append(
                 order
             )
-
             continue
 
         delivered.append(
@@ -601,7 +579,6 @@ def aggregate_orders(
         ] += amount
 
         if platform == "yandex_food":
-
             daily[
                 day
             ][
@@ -615,7 +592,6 @@ def aggregate_orders(
             ] += amount
 
         elif platform == "kuper":
-
             daily[
                 day
             ][
@@ -629,7 +605,6 @@ def aggregate_orders(
             ] += amount
 
         else:
-
             daily[
                 day
             ][
@@ -651,13 +626,11 @@ def aggregate_orders(
 
 
 def load_existing():
-
     result = {}
 
     if not os.path.exists(
         OUTPUT_FILE
     ):
-
         return result
 
     with open(
@@ -666,13 +639,11 @@ def load_existing():
         encoding="utf-8-sig",
         newline="",
     ) as file:
-
         reader = csv.DictReader(
             file
         )
 
         for row in reader:
-
             date_text = (
                 row.get(
                     "date",
@@ -681,7 +652,6 @@ def load_existing():
             )
 
             if not date_text:
-
                 continue
 
             result[
@@ -696,13 +666,10 @@ def remove_period_rows(
     start_date,
     end_date,
 ):
-
     keys = []
 
     for key in rows:
-
         try:
-
             date = (
                 datetime.strptime(
                     key,
@@ -712,7 +679,6 @@ def remove_period_rows(
             )
 
         except ValueError:
-
             continue
 
         if (
@@ -720,18 +686,15 @@ def remove_period_rows(
             <= date
             <= end_date
         ):
-
             keys.append(
                 key
             )
 
     for key in keys:
-
         del rows[key]
 
 
 def save_rows(rows):
-
     fieldnames = [
         "date",
         "self_pickup",
@@ -760,7 +723,6 @@ def save_rows(rows):
         encoding="utf-8-sig",
         newline="",
     ) as file:
-
         writer = csv.DictWriter(
             file,
             fieldnames=fieldnames,
@@ -769,7 +731,6 @@ def save_rows(rows):
         writer.writeheader()
 
         for row in ordered:
-
             writer.writerow(
                 {
                     field:
@@ -790,7 +751,6 @@ def update_period(
     month,
     end_day,
 ):
-
     start_date = (
         datetime(
             year,
@@ -822,8 +782,7 @@ def update_period(
 
     print()
     print(
-        "Получаю собственные "
-        "заказы МН..."
+        "Получаю собственные заказы МН..."
     )
 
     self_pickup_values = (
@@ -841,8 +800,7 @@ def update_period(
 
     print()
     print(
-        "Получаю внешние "
-        "заказы..."
+        "Получаю внешние заказы..."
     )
 
     orders = (
@@ -925,9 +883,7 @@ def update_period(
     )
 
     print()
-    print(
-        "Яндекс:"
-    )
+    print("Яндекс:")
 
     print(
         "  заказов:",
@@ -939,9 +895,7 @@ def update_period(
         f"{yandex_sum:,.2f} ₽",
     )
 
-    print(
-        "Купер:"
-    )
+    print("Купер:")
 
     print(
         "  заказов:",
@@ -954,15 +908,12 @@ def update_period(
     )
 
     if other_orders:
-
         print()
         print(
-            "ВНИМАНИЕ: найдены "
-            "другие платформы:"
+            "ВНИМАНИЕ: найдены другие платформы:"
         )
 
         for order in other_orders:
-
             print(
                 "-",
                 order["platform"],
@@ -998,7 +949,6 @@ def update_period(
         current_date
         <= end_date
     ):
-
         info = (
             daily_orders[
                 current_date
@@ -1103,13 +1053,10 @@ def update_period(
 def verify_july(
     rows,
 ):
-
     july_rows = []
 
     for row in rows.values():
-
         try:
-
             date = (
                 datetime.strptime(
                     row["date"],
@@ -1119,14 +1066,12 @@ def verify_july(
             )
 
         except Exception:
-
             continue
 
         if (
             date.year == 2026
             and date.month == 7
         ):
-
             july_rows.append(
                 row
             )
@@ -1250,20 +1195,17 @@ def verify_july(
     print()
 
     if all(checks):
-
         print(
             "ИЮЛЬ: ПОЛНОСТЬЮ СОШЁЛСЯ"
         )
 
     else:
-
         print(
             "ИЮЛЬ: ЕСТЬ РАСХОЖДЕНИЕ"
         )
 
 
 def main():
-
     print()
     print("=" * 70)
 
@@ -1291,7 +1233,6 @@ def main():
     )
 
     with sync_playwright() as p:
-
         browser = p.chromium.launch(
             headless=True
         )
@@ -1319,7 +1260,6 @@ def main():
             latest_closed.year == 2026
             and latest_closed.month == 7
         ):
-
             update_period(
                 page,
                 rows,
@@ -1351,13 +1291,10 @@ def main():
 
     print()
     print(
-        "Суммы Яндекс/Купер "
-        "и количество заказов "
-        "берутся из одной "
-        "таблицы внешних заказов."
+        "Суммы Яндекс/Купер и количество заказов "
+        "берутся из одной таблицы внешних заказов."
     )
 
 
 if __name__ == "__main__":
-
     main()
