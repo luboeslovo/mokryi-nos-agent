@@ -20,6 +20,11 @@ from agent_tools import (
     run_tool,
 )
 
+from agent_followups import (
+    is_last_call_reason_followup,
+    is_next_call_followup,
+)
+
 from sales_renderer import (
     render_month_comparison,
 )
@@ -279,131 +284,6 @@ def get_latest_data_date():
         pass
 
     return None
-
-
-def is_next_call_followup(
-    question,
-    conversation_id,
-):
-    if not get_last_call_suggestion(
-        conversation_id
-    ):
-        return False
-
-    text = (
-        str(
-            question or ""
-        )
-        .strip()
-        .lower()
-        .replace(
-            "ё",
-            "е",
-        )
-    )
-
-    exact_phrases = {
-        "а кому еще?",
-        "а кому еще",
-        "кому еще?",
-        "кому еще",
-        "еще",
-        "дальше",
-        "кто следующий?",
-        "кто следующий",
-        "следующий",
-        "а дальше?",
-        "а дальше",
-        "а кому дальше?",
-        "а кому дальше",
-        "кому дальше?",
-        "кому дальше",
-    }
-
-    if text in exact_phrases:
-        return True
-
-    patterns = [
-        "кому звонить после",
-        "кому позвонить после",
-        "кто после",
-        "кого после",
-        "следующий клиент",
-        "следующий звонок",
-        "кому дальше звонить",
-        "кому дальше позвонить",
-    ]
-
-    return any(
-        pattern in text
-        for pattern in patterns
-    )
-
-
-def is_last_call_reason_followup(
-    question,
-    conversation_id,
-):
-    if not get_last_call_suggestion(
-        conversation_id
-    ):
-        return False
-
-    text = (
-        str(
-            question or ""
-        )
-        .strip()
-        .lower()
-        .replace(
-            "ё",
-            "е",
-        )
-    )
-
-    exact_phrases = {
-        "почему?",
-        "почему",
-        "почему он?",
-        "почему он",
-        "почему она?",
-        "почему она",
-        "почему именно он?",
-        "почему именно он",
-        "почему именно она?",
-        "почему именно она",
-        "а почему он?",
-        "а почему он",
-        "а почему она?",
-        "а почему она",
-        "а почему именно он?",
-        "а почему именно он",
-        "а почему именно она?",
-        "а почему именно она",
-    }
-
-    if text in exact_phrases:
-        return True
-
-    patterns = [
-        "почему ты его выбрал",
-        "почему ты ее выбрал",
-        "почему выбрал его",
-        "почему выбрал ее",
-        "почему этот клиент",
-        "почему эта клиентка",
-        "почему именно этот",
-        "почему именно эту",
-        "чем он лучше",
-        "чем она лучше",
-        "почему ему звонить",
-        "почему ей звонить",
-    ]
-
-    return any(
-        pattern in text
-        for pattern in patterns
-    )
 
 
 def record_call_result(

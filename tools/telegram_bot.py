@@ -5,7 +5,7 @@ import urllib.request
 
 import keyring
 
-from agent_chat import answer_question
+from agent_core import answer_question
 
 
 SERVICE_NAME = "mokryi-nos-agent-telegram"
@@ -94,7 +94,6 @@ def split_message(text):
         return [text]
 
     parts = []
-
     remaining = text
 
     while remaining:
@@ -224,11 +223,11 @@ def handle_message(
                 "Я подключён к данным магазина "
                 "и могу отвечать на вопросы по аналитике.\n\n"
                 "Например:\n"
+                "• как вчера прошёл день?\n"
+                "• сравни август с июлем\n"
+                "• кого мне сейчас лучше обзвонить?\n"
                 "• покажи топ 5 клиентов\n"
-                "• что покупает Сергей Зверев?\n"
-                "• найди клиента Иванова\n\n"
-                "Сейчас набор доступных данных "
-                "ещё расширяется."
+                "• что покупает Сергей Зверев?"
             ),
         )
         return
@@ -240,13 +239,18 @@ def handle_message(
             chat_id,
             (
                 "Просто напиши вопрос обычным языком.\n\n"
-                "Сейчас я умею работать прежде всего "
-                "с клиентской аналитикой. "
-                "Продажи по дням, RFM, ОПиУ и другие "
-                "данные добавим следующими инструментами."
+                "Я умею работать с продажами, "
+                "клиентами, RFM-сегментами "
+                "и приоритетами для обзвона.\n\n"
+                "Я также помню контекст сообщений "
+                "внутри этого Telegram-чата."
             ),
         )
         return
+
+    conversation_id = (
+        f"telegram:{chat_id}"
+    )
 
     try:
         send_chat_action(
@@ -259,7 +263,8 @@ def handle_message(
         )
 
         answer = answer_question(
-            text
+            text,
+            conversation_id=conversation_id,
         )
 
         print()
@@ -306,6 +311,9 @@ def main():
     )
     print(
         "AI-агент подключён."
+    )
+    print(
+        "Память разделена по Telegram-чатам."
     )
     print(
         "Для остановки нажми Ctrl+C."
