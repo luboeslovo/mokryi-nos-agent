@@ -1,104 +1,341 @@
 import json
 
-from ollama import Client
+import keyring
+
+from gigachat import GigaChat
+from gigachat.models import (
+    ChatCompletionRequest,
+    ChatFunctionSpecification,
+    ChatMessage,
+    ChatTool,
+)
 
 from customer_tools import (
+    find_customer_by_name,
     get_customer_profile,
     get_top_customers,
-    find_customer_by_name,
+)
+
+from sales_tools import (
+    compare_sales_days,
+    get_daily_sales,
+    get_latest_sales_day,
+    get_month_summary,
+    get_recent_sales,
 )
 
 
-MODEL = "qwen3:4b-instruct"
+SERVICE_NAME = "mokryi-nos-agent-gigachat"
+ACCOUNT_NAME = "authorization_key"
+
+SCOPE = "GIGACHAT_API_PERS"
+MODEL = "GigaChat-3-Ultra"
 
 
-client = Client(
-    host="http://127.0.0.1:11434",
-    trust_env=False
+def get_authorization_key():
+    authorization_key = keyring.get_password(
+        SERVICE_NAME,
+        ACCOUNT_NAME,
+    )
+
+    if not authorization_key:
+        raise RuntimeError(
+            "Authorization key GigaChat не найден "
+            "в защищённом хранилище Windows."
+        )
+
+    return authorization_key
+
+
+client = GigaChat(
+    credentials=get_authorization_key(),
+    scope=SCOPE,
+    model=MODEL,
+    verify_ssl_certs=False,
+    timeout=60,
 )
 
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_customer_profile",
-            "description": (
-                "Получает подробную информацию об одном конкретном покупателе "
-                "по его customer_id. Используй этот инструмент, если пользователь "
-                "указал именно customer_id."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "customer_id": {
-                        "type": "string",
-                        "description": "ID конкретного покупателя в CRM"
-                    }
+FUNCTION_SPECS = [
+    ChatFunctionSpecification(
+        name="get_customer_profile",
+        description=(
+            "Получает подробный профиль конкретного клиента "
+            "зоомагазина по customer_id. "
+            "Используй, когда customer_id уже известен."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "ID клиента в CRM",
                 },
-                "required": ["customer_id"]
-            }
-        }
-    },
+            },
+            "required": [
+                "customer_id",
+            ],
+        },
+    ),
 
-    {
-        "type": "function",
-        "function": {
-            "name": "get_top_customers",
-            "description": (
-                "Получает рейтинг самых ценных покупателей магазина "
-                "по общей сумме их положительных покупок."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "Сколько покупателей показать"
-                    }
+    ChatFunctionSpecification(
+        name="get_top_customers",
+        description=(
+            "Возвращает самых ценных клиентов магазина "
+            "по общей сумме положительных покупок. "
+            "Используй для вопросов про топ клиентов, "
+            "лучших покупателей и самых крупных клиентов."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Сколько клиентов вернуть",
                 },
-                "required": ["limit"]
-            }
-        }
-    },
+            },
+            "required": [
+                "limit",
+            ],
+        },
+    ),
 
-    {
-        "type": "function",
-        "function": {
-            "name": "find_customer_by_name",
-            "description": (
-                "Ищет покупателя по имени, фамилии или имени и фамилии. "
-                "Используй этот инструмент, когда пользователь называет человека "
-                "по имени, а не по customer_id. Если найден один человек, "
-                "инструмент сразу возвращает его профиль и покупки."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": (
-                            "Имя, фамилия или полное имя покупателя, "
-                            "например Сергей Зверев"
-                        )
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": (
-                            "Максимальное количество кандидатов "
-                            "при неоднозначном поиске"
-                        )
-                    }
+    ChatFunctionSpecification(
+        name="find_customer_by_name",
+        description=(
+            "Ищет клиента по имени, фамилии "
+            "или полному имени. "
+            "Используй, если пользователь называет "
+            "клиента по имени, а customer_id неизвестен."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Имя, фамилия или полное имя клиента"
+                    ),
                 },
-                "required": ["query"]
-            }
-        }
-    }
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Максимальное количество "
+                        "кандидатов при поиске"
+                    ),
+                },
+            },
+            "required": [
+                "query",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_latest_sales_day",
+        description=(
+            "Возвращает показатели последнего закрытого "
+            "дня магазина И точное сравнение "
+            "с предыдущим закрытым днём. "
+            "Используй для общих вопросов: "
+            "'как вчера торговали', "
+            "'как прошёл вчерашний день', "
+            "'ну че как вчера', "
+            "'вчера хорошо торговали?', "
+            "'что было вчера'. "
+            "Благодаря сравнению можно обоснованно "
+            "оценить, был последний день сильнее "
+            "или слабее предыдущего."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_daily_sales",
+        description=(
+            "Возвращает показатели магазина "
+            "за конкретную дату: "
+            "полную выручку, кассовые продажи, "
+            "количество чеков, товары, КТЧ, "
+            "средний чек, наличные, карту, возвраты, "
+            "Яндекс, Купер и внешние заказы. "
+            "Используй, когда нужна одна конкретная дата "
+            "без обязательного сравнения."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": (
+                        "Дата в формате ДД.ММ.ГГГГ. "
+                        "Для последнего закрытого дня "
+                        "можно использовать latest."
+                    ),
+                },
+            },
+            "required": [
+                "date",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="compare_sales_days",
+        description=(
+            "Сравнивает два конкретных дня магазина. "
+            "Python сам определяет, какая дата раньше, "
+            "а какая позже, и считает изменение "
+            "позднего дня относительно более раннего. "
+            "Возвращает точные абсолютные "
+            "и процентные изменения. "
+            "Используй для вопросов вроде "
+            "'сравни 16 и 17 августа'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "date_a": {
+                    "type": "string",
+                    "description": (
+                        "Первая дата в формате ДД.ММ.ГГГГ"
+                    ),
+                },
+                "date_b": {
+                    "type": "string",
+                    "description": (
+                        "Вторая дата в формате ДД.ММ.ГГГГ"
+                    ),
+                },
+            },
+            "required": [
+                "date_a",
+                "date_b",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_recent_sales",
+        description=(
+            "Возвращает показатели нескольких последних "
+            "закрытых дней магазина. "
+            "Используй для анализа динамики "
+            "нескольких дней, например "
+            "'как торговали последние 7 дней'."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": (
+                        "Количество последних дней "
+                        "от 1 до 31"
+                    ),
+                },
+            },
+            "required": [
+                "days",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_month_summary",
+        description=(
+            "Возвращает сводные показатели магазина "
+            "за месяц: полную выручку, "
+            "кассовую выручку, чеки, товары, "
+            "средний чек, КТЧ, Яндекс, "
+            "внешние заказы и возвраты. "
+            "Для незавершённого месяца учитывает "
+            "только имеющиеся закрытые дни."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "year": {
+                    "type": "integer",
+                    "description": (
+                        "Год, например 2026"
+                    ),
+                },
+                "month": {
+                    "type": "integer",
+                    "description": (
+                        "Номер месяца от 1 до 12"
+                    ),
+                },
+            },
+            "required": [
+                "year",
+                "month",
+            ],
+        },
+    ),
 ]
 
 
-def run_tool(name, arguments):
+TOOLS = [
+    ChatTool(
+        functions={
+            "specifications":
+                FUNCTION_SPECS,
+        }
+    )
+]
 
+
+def build_latest_day_report():
+    latest = get_latest_sales_day()
+
+    if latest.get("status") != "ok":
+        return latest
+
+    result = {
+        "status": "ok",
+        "day": latest["day"],
+    }
+
+    recent = get_recent_sales(
+        2
+    )
+
+    recent_days = recent.get(
+        "days",
+        [],
+    )
+
+    if len(recent_days) < 2:
+        return result
+
+    previous_day = recent_days[-2]
+    latest_day = recent_days[-1]
+
+    comparison = compare_sales_days(
+        previous_day["date"],
+        latest_day["date"],
+    )
+
+    result[
+        "previous_day"
+    ] = previous_day
+
+    result[
+        "comparison_with_previous_day"
+    ] = comparison
+
+    return result
+
+
+def run_tool(
+    name,
+    arguments,
+):
     if name == "get_customer_profile":
         return get_customer_profile(
             arguments["customer_id"]
@@ -106,258 +343,672 @@ def run_tool(name, arguments):
 
     if name == "get_top_customers":
         return get_top_customers(
-            arguments["limit"]
+            arguments.get(
+                "limit",
+                5,
+            )
         )
 
     if name == "find_customer_by_name":
         return find_customer_by_name(
             arguments["query"],
-            arguments.get("limit", 10)
+            arguments.get(
+                "limit",
+                10,
+            ),
+        )
+
+    if name == "get_latest_sales_day":
+        return build_latest_day_report()
+
+    if name == "get_daily_sales":
+        return get_daily_sales(
+            arguments.get(
+                "date",
+                "latest",
+            )
+        )
+
+    if name == "compare_sales_days":
+        return compare_sales_days(
+            arguments["date_a"],
+            arguments["date_b"],
+        )
+
+    if name == "get_recent_sales":
+        return get_recent_sales(
+            arguments.get(
+                "days",
+                7,
+            )
+        )
+
+    if name == "get_month_summary":
+        return get_month_summary(
+            arguments["year"],
+            arguments["month"],
         )
 
     return {
         "error": "unknown_tool",
-        "tool": name
+        "tool": name,
     }
 
 
-def make_compact_result(tool_name, result):
-
+def compact_result(
+    tool_name,
+    result,
+):
     if tool_name == "get_top_customers":
-
         customers = []
 
-        for customer in result.get("customers", []):
+        for customer in result.get(
+            "customers",
+            [],
+        ):
+            customers.append(
+                {
+                    "position":
+                        customer.get(
+                            "position"
+                        ),
 
-            customers.append({
-                "position": customer.get("position"),
-                "customer_id": customer.get("customer_id"),
-                "name": customer.get("name"),
-                "lastname": customer.get("lastname"),
-                "purchases": customer.get("purchases"),
-                "total_rubles": customer.get("total_rubles"),
-                "average_check_rubles": customer.get(
-                    "average_check_rubles"
-                ),
-                "first_purchase": customer.get("first_purchase"),
-                "last_purchase": customer.get("last_purchase")
-            })
+                    "customer_id":
+                        customer.get(
+                            "customer_id"
+                        ),
+
+                    "name":
+                        customer.get(
+                            "name"
+                        ),
+
+                    "lastname":
+                        customer.get(
+                            "lastname"
+                        ),
+
+                    "purchases":
+                        customer.get(
+                            "purchases"
+                        ),
+
+                    "total_rubles":
+                        customer.get(
+                            "total_rubles"
+                        ),
+
+                    "average_check_rubles":
+                        customer.get(
+                            "average_check_rubles"
+                        ),
+
+                    "first_purchase":
+                        customer.get(
+                            "first_purchase"
+                        ),
+
+                    "last_purchase":
+                        customer.get(
+                            "last_purchase"
+                        ),
+                }
+            )
 
         return {
-            "ranking": result.get("ranking"),
-            "customers": customers
-        }
+            "ranking":
+                result.get(
+                    "ranking"
+                ),
 
+            "customers":
+                customers,
+        }
 
     if tool_name == "get_customer_profile":
-
         return {
-            "customer": result.get("customer"),
-            "statistics": result.get("statistics"),
-            "top_products": result.get("top_products", [])[:5]
+            "customer":
+                result.get(
+                    "customer"
+                ),
+
+            "statistics":
+                result.get(
+                    "statistics"
+                ),
+
+            "top_products":
+                result.get(
+                    "top_products",
+                    [],
+                )[:5],
         }
 
-
     if tool_name == "find_customer_by_name":
-
-        if result.get("status") == "unique_match":
-
-            profile = result.get("profile", {})
+        if (
+            result.get(
+                "status"
+            )
+            == "unique_match"
+        ):
+            profile = result.get(
+                "profile",
+                {},
+            )
 
             return {
-                "status": "unique_match",
-                "query": result.get("query"),
+                "status":
+                    "unique_match",
+
+                "query":
+                    result.get(
+                        "query"
+                    ),
+
                 "profile": {
-                    "customer": profile.get("customer"),
-                    "statistics": profile.get("statistics"),
-                    "top_products": profile.get(
-                        "top_products",
-                        []
-                    )[:5]
-                }
+                    "customer":
+                        profile.get(
+                            "customer"
+                        ),
+
+                    "statistics":
+                        profile.get(
+                            "statistics"
+                        ),
+
+                    "top_products":
+                        profile.get(
+                            "top_products",
+                            [],
+                        )[:5],
+                },
             }
-
-        return result
-
 
     return result
 
 
-print()
-print("АГЕНТ ЗООМАГАЗИНА")
-print("=" * 60)
-print()
-print("Напиши вопрос.")
-print("Для выхода напиши: выход")
-print()
-
-
-while True:
-
-    question = input("Ты: ").strip()
-
-    if question.lower() in {
-        "выход",
-        "exit",
-        "quit"
-    }:
-        print("Пока!")
-        break
-
-    if not question:
-        continue
-
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Ты аналитик зоомагазина. "
-                "У тебя есть инструменты для получения реальных данных "
-                "из локальной базы магазина. "
-                "Сам выбирай подходящий инструмент. "
-                "Если дан customer_id, используй инструмент поиска по customer_id. "
-                "Если человек назван по имени или фамилии, используй поиск по имени. "
-                "Никогда не придумывай цифры или факты."
-            )
-        },
-        {
-            "role": "user",
-            "content": question
-        }
-    ]
-
-
-    print()
-    print("Qwen думает...")
-    print()
-
-
-    response = client.chat(
-        model=MODEL,
-        messages=messages,
-        tools=TOOLS,
-        think=False,
-        stream=False,
-        options={
-            "num_ctx": 1024,
-            "num_thread": 2,
-            "num_predict": 100,
-            "temperature": 0
-        },
-        keep_alive="2m"
+def extract_function_call(
+    message,
+):
+    function_call = getattr(
+        message,
+        "function_call",
+        None,
     )
 
+    if function_call is not None:
+        return function_call
 
-    if response.message.tool_calls:
+    content = getattr(
+        message,
+        "content",
+        None,
+    )
 
-        all_results = []
+    if not content:
+        return None
 
-        for call in response.message.tool_calls:
+    for part in content:
+        function_call = getattr(
+            part,
+            "function_call",
+            None,
+        )
 
-            name = call.function.name
-            arguments = call.function.arguments
+        if function_call is not None:
+            return function_call
 
-            print(
-                f"[tool] {name}({arguments})"
+    return None
+
+
+def extract_text(
+    response,
+):
+    messages = getattr(
+        response,
+        "messages",
+        None,
+    )
+
+    if not messages:
+        return ""
+
+    message = messages[0]
+
+    content = getattr(
+        message,
+        "content",
+        None,
+    )
+
+    if isinstance(
+        content,
+        str,
+    ):
+        return content.strip()
+
+    if not content:
+        return ""
+
+    parts = []
+
+    for part in content:
+        text = getattr(
+            part,
+            "text",
+            None,
+        )
+
+        if text:
+            parts.append(
+                text
             )
 
-            try:
-
-                result = run_tool(
-                    name,
-                    arguments
-                )
-
-            except Exception as error:
-
-                result = {
-                    "error": "tool_execution_failed",
-                    "message": str(error)
-                }
+    return "\n".join(
+        parts
+    ).strip()
 
 
-            compact_result = make_compact_result(
-                name,
+def normalize_arguments(
+    arguments,
+):
+    if arguments is None:
+        return {}
+
+    if isinstance(
+        arguments,
+        dict,
+    ):
+        return arguments
+
+    if isinstance(
+        arguments,
+        str,
+    ):
+        try:
+            return json.loads(
+                arguments
+            )
+
+        except json.JSONDecodeError:
+            return {}
+
+    try:
+        return dict(
+            arguments
+        )
+
+    except Exception:
+        return {}
+
+
+def get_latest_data_date():
+    try:
+        result = (
+            get_latest_sales_day()
+        )
+
+        if (
+            result.get(
+                "status"
+            )
+            == "ok"
+        ):
+            return (
                 result
+                .get(
+                    "day",
+                    {},
+                )
+                .get(
+                    "date"
+                )
             )
 
-            all_results.append({
-                "tool": name,
-                "result": compact_result
-            })
+    except Exception:
+        pass
+
+    return None
 
 
-        tool_data = json.dumps(
-            all_results,
-            ensure_ascii=False,
-            separators=(",", ":")
+def answer_question(
+    question,
+):
+    question = str(
+        question or ""
+    ).strip()
+
+    if not question:
+        return (
+            "Напиши вопрос о магазине."
         )
 
+    latest_data_date = (
+        get_latest_data_date()
+    )
 
-        final_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Ты аналитик зоомагазина. "
-                    "Ответь на вопрос пользователя только на основе "
-                    "данных Python-инструмента ниже. "
-                    "Ничего не придумывай и ничего не угадывай. "
-                    "Не путай имена, позиции и числа разных клиентов. "
-                    "Если найдено несколько людей с похожим именем, "
-                    "не выбирай человека самостоятельно — покажи варианты. "
-                    "Если каких-то данных нет, прямо скажи об этом."
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"ВОПРОС:\n{question}\n\n"
-                    f"РЕАЛЬНЫЕ ДАННЫЕ ИЗ PYTHON:\n{tool_data}\n\n"
-                    "Сформулируй короткий и понятный ответ."
-                )
-            }
-        ]
+    date_context = ""
 
-
-        print()
-        print("Агент:")
-        print()
-
-
-        stream = client.chat(
-            model=MODEL,
-            messages=final_messages,
-            think=False,
-            stream=True,
-            options={
-                "num_ctx": 1536,
-                "num_thread": 2,
-                "num_predict": 260,
-                "temperature": 0.1
-            },
-            keep_alive=0
+    if latest_data_date:
+        date_context = (
+            "\nПоследний закрытый день "
+            f"в дневной аналитике: "
+            f"{latest_data_date}. "
+            "Слова 'вчера' и 'последний день' "
+            "относи именно к этой дате."
         )
 
+    system_prompt = (
+        "Ты AI-аналитик зоомагазина "
+        "«Мокрый нос».\n"
+        "\n"
+        "У тебя есть функции с реальными "
+        "данными магазина.\n"
+        "Для фактов о магазине, клиентах "
+        "или продажах обязательно используй "
+        "подходящую функцию.\n"
+        "Не придумывай цифры.\n"
+        "\n"
+        "Если пользователь спрашивает в целом, "
+        "как прошёл вчерашний или последний день, "
+        "используй get_latest_sales_day. "
+        "Эта функция возвращает и сам день, "
+        "и точное сравнение с предыдущим днём.\n"
+        "\n"
+        "Для клиента по имени используй "
+        "find_customer_by_name.\n"
+        "Для customer_id используй "
+        "get_customer_profile.\n"
+        "\n"
+        "total_revenue — полная выручка магазина.\n"
+        "check_revenue_net — кассовые продажи "
+        "после возвратов.\n"
+        "external_total — внешние заказы.\n"
+        "КТЧ — среднее количество товаров "
+        "в одном чеке.\n"
+        "\n"
+        "Не называй день хорошим, плохим, "
+        "сильным или слабым только по абсолютной "
+        "сумме выручки. Для такой оценки используй "
+        "сравнение с предыдущим днём.\n"
+        "\n"
+        "Не выполняй самостоятельно арифметику, "
+        "если Python уже вернул готовые "
+        "процентные изменения.\n"
+        "\n"
+        "Отвечай по-русски."
+        + date_context
+    )
 
-        for chunk in stream:
+    request = ChatCompletionRequest(
+        messages=[
+            ChatMessage(
+                role="system",
+                content=system_prompt,
+            ),
+            ChatMessage(
+                role="user",
+                content=question,
+            ),
+        ],
+        tools=TOOLS,
+    )
 
-            if chunk.message.content:
+    first_response = (
+        client.chat.create(
+            request
+        )
+    )
 
-                print(
-                    chunk.message.content,
-                    end="",
-                    flush=True
-                )
+    first_message = (
+        first_response
+        .messages[0]
+    )
 
+    function_call = (
+        extract_function_call(
+            first_message
+        )
+    )
+
+    if function_call is None:
+        text = extract_text(
+            first_response
+        )
+
+        if text:
+            return text
+
+        return (
+            "Не получилось сформировать ответ."
+        )
+
+    tool_name = (
+        function_call.name
+    )
+
+    arguments = normalize_arguments(
+        function_call.arguments
+    )
+
+    print(
+        f"[tool] {tool_name}({arguments})"
+    )
+
+    try:
+        tool_result = run_tool(
+            tool_name,
+            arguments,
+        )
+
+    except Exception as error:
+        tool_result = {
+            "error":
+                "tool_execution_failed",
+
+            "message":
+                (
+                    f"{type(error).__name__}: "
+                    f"{error}"
+                ),
+        }
+
+    real_data = compact_result(
+        tool_name,
+        tool_result,
+    )
+
+    real_data_json = json.dumps(
+        real_data,
+        ensure_ascii=False,
+        separators=(
+            ",",
+            ":",
+        ),
+    )
+
+    final_system_prompt = (
+        "Ты AI-аналитик зоомагазина "
+        "«Мокрый нос».\n"
+        "\n"
+        "Тебе передан результат Python-функции "
+        "с реальными данными магазина.\n"
+        "Ответь на исходный вопрос ТОЛЬКО "
+        "на основе этих данных.\n"
+        "\n"
+        "Ничего не придумывай.\n"
+        "Не добавляй неподтверждённые причины.\n"
+        "\n"
+        "Если присутствует "
+        "comparison_with_previous_day, "
+        "используй это сравнение, когда оцениваешь, "
+        "как прошёл день.\n"
+        "\n"
+        "В структуре сравнения:\n"
+        "earlier — значение более раннего дня;\n"
+        "later — значение более позднего дня;\n"
+        "difference_later_minus_earlier — "
+        "поздний день минус ранний;\n"
+        "change_percent_vs_earlier — "
+        "точное изменение позднего дня "
+        "относительно раннего;\n"
+        "direction — направление изменения.\n"
+        "\n"
+        "НЕ пересчитывай процент самостоятельно. "
+        "Используй change_percent_vs_earlier "
+        "как источник истины.\n"
+        "\n"
+        "Не говори, что чеков стало меньше, "
+        "если later больше earlier, и наоборот.\n"
+        "\n"
+        "Если рост показателя виден в данных, "
+        "можно сказать, что показатель вырос. "
+        "Но не утверждай конкретную причину роста, "
+        "если данных для причинного вывода нет.\n"
+        "\n"
+        "Например, если одновременно выросли "
+        "средний чек и КТЧ, можно сказать, "
+        "что рост выручки сопровождался "
+        "более крупными покупками. "
+        "Но не придумывай, почему покупатели "
+        "стали покупать больше.\n"
+        "\n"
+        "total_revenue — полная выручка.\n"
+        "check_revenue_net — кассовые продажи "
+        "после возвратов.\n"
+        "external_total — внешние заказы.\n"
+        "КТЧ — среднее количество товаров "
+        "в одном чеке.\n"
+        "\n"
+        "Если найдено несколько клиентов "
+        "с похожим именем, покажи варианты "
+        "и не выбирай человека сам.\n"
+        "\n"
+        "Не показывай внутренние Python-названия "
+        "полей пользователю.\n"
+        "Пиши естественно, компактно "
+        "и по-русски."
+    )
+
+    final_request = (
+        ChatCompletionRequest(
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=(
+                        final_system_prompt
+                    ),
+                ),
+                ChatMessage(
+                    role="user",
+                    content=(
+                        "ИСХОДНЫЙ ВОПРОС:\n"
+                        f"{question}\n"
+                        "\n"
+                        "ВЫЗВАННАЯ ФУНКЦИЯ:\n"
+                        f"{tool_name}\n"
+                        "\n"
+                        "РЕАЛЬНЫЕ ДАННЫЕ "
+                        "ИЗ PYTHON:\n"
+                        f"{real_data_json}\n"
+                        "\n"
+                        "Сформулируй ответ "
+                        "пользователю."
+                    ),
+                ),
+            ],
+        )
+    )
+
+    final_response = (
+        client.chat.create(
+            final_request
+        )
+    )
+
+    text = extract_text(
+        final_response
+    )
+
+    if not text:
+        return (
+            "Не получилось сформировать ответ."
+        )
+
+    return text
+
+
+def console_chat():
+    print()
+    print(
+        "АГЕНТ ЗООМАГАЗИНА"
+    )
+    print("=" * 60)
+    print()
+    print(
+        f"Модель: {MODEL}"
+    )
+    print(
+        "Напиши вопрос."
+    )
+    print(
+        "Для выхода напиши: выход"
+    )
+    print()
+
+    while True:
+        try:
+            question = input(
+                "Ты: "
+            ).strip()
+
+        except KeyboardInterrupt:
+            print()
+            print(
+                "Пока!"
+            )
+            break
+
+        if question.lower() in {
+            "выход",
+            "exit",
+            "quit",
+        }:
+            print(
+                "Пока!"
+            )
+            break
+
+        if not question:
+            continue
 
         print()
+        print(
+            "Агент думает..."
+        )
+        print()
+
+        try:
+            answer = answer_question(
+                question
+            )
+
+        except Exception as error:
+            answer = (
+                "Ошибка агента: "
+                f"{type(error).__name__}: "
+                f"{error}"
+            )
+
+        print(
+            "Агент:"
+        )
+        print()
+        print(
+            answer
+        )
         print()
 
 
-    else:
-
-        print("Агент:")
-        print()
-        print(response.message.content)
-        print()
+if __name__ == "__main__":
+    console_chat()
