@@ -18,6 +18,14 @@ from sales_tools import (
     get_recent_sales,
 )
 
+from sales_analytics import (
+    compare_sales_periods,
+    compare_sales_years,
+    get_period_summary,
+    get_year_summary,
+    rank_sales_periods,
+)
+
 from rfm_tools import (
     get_contact_candidates,
     get_rfm_segment,
@@ -25,6 +33,7 @@ from rfm_tools import (
 )
 
 from call_tools import (
+    get_customer_call_assessment,
     get_next_call_candidate,
 )
 
@@ -45,7 +54,9 @@ FUNCTION_SPECS = [
             "properties": {
                 "customer_id": {
                     "type": "string",
-                    "description": "ID клиента в CRM",
+                    "description": (
+                        "ID клиента в CRM"
+                    ),
                 },
             },
             "required": [
@@ -65,7 +76,9 @@ FUNCTION_SPECS = [
             "properties": {
                 "limit": {
                     "type": "integer",
-                    "description": "Сколько клиентов вернуть",
+                    "description": (
+                        "Сколько клиентов вернуть"
+                    ),
                 },
             },
             "required": [
@@ -102,13 +115,17 @@ FUNCTION_SPECS = [
         },
     ),
 
+    # ========================================================
+    # ПРОДАЖИ — ДНИ
+    # ========================================================
+
     ChatFunctionSpecification(
         name="get_latest_sales_day",
         description=(
             "Возвращает последний закрытый день магазина "
             "и сравнение с предыдущим закрытым днём. "
-            "Используй для вопросов про вчера "
-            "и последний закрытый день."
+            "Используй для вопросов про вчера, последний "
+            "закрытый день или последние продажи."
         ),
         parameters={
             "type": "object",
@@ -120,7 +137,8 @@ FUNCTION_SPECS = [
         name="get_daily_sales",
         description=(
             "Возвращает продажи магазина "
-            "за одну конкретную дату."
+            "за одну конкретную дату. "
+            "Используй только когда нужен один день."
         ),
         parameters={
             "type": "object",
@@ -141,10 +159,10 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_days",
         description=(
-            "Сравнивает два КОНКРЕТНЫХ ДНЯ магазина. "
-            "Используй только когда пользователь "
-            "говорит про отдельные даты или дни. "
-            "Никогда не используй для сравнения месяцев."
+            "Сравнивает два конкретных дня магазина. "
+            "Используй только для двух отдельных дат. "
+            "Не используй для месяцев, годов "
+            "или диапазонов дат."
         ),
         parameters={
             "type": "object",
@@ -180,7 +198,9 @@ FUNCTION_SPECS = [
             "properties": {
                 "days": {
                     "type": "integer",
-                    "description": "Количество дней",
+                    "description": (
+                        "Количество последних дней"
+                    ),
                 },
             },
             "required": [
@@ -189,19 +209,26 @@ FUNCTION_SPECS = [
         },
     ),
 
+    # ========================================================
+    # ПРОДАЖИ — МЕСЯЦЫ
+    # ========================================================
+
     ChatFunctionSpecification(
         name="get_month_summary",
         description=(
-            "Возвращает показатели одного месяца. "
-            "Если месяц ещё не завершён, "
-            "возвращает доступную часть месяца."
+            "Возвращает показатели одного календарного месяца. "
+            "Если текущий месяц ещё не завершён, "
+            "возвращает доступную часть месяца. "
+            "Используй для вопроса про один конкретный месяц."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "year": {
                     "type": "integer",
-                    "description": "Год",
+                    "description": (
+                        "Год"
+                    ),
                 },
                 "month": {
                     "type": "integer",
@@ -220,15 +247,15 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_months",
         description=(
-            "Сравнивает ДВА МЕСЯЦА магазина. "
-            "Если более поздний месяц ещё не завершён, "
-            "Python автоматически сравнивает одинаковые "
-            "периоды, например 1–17 августа "
-            "против 1–17 июля. "
-            "Используй для 'сравни август с июлем', "
-            "'июль лучше июня?', "
-            "'как август идёт относительно июля'. "
-            "Не заменяй месяцы отдельными днями."
+            "Сравнивает два календарных месяца магазина. "
+            "Особенно полезен для текущего незавершённого месяца: "
+            "Python автоматически делает честное like-for-like "
+            "сравнение одинакового количества дней. "
+            "Например, 1–17 августа против 1–17 июля. "
+            "Используй для запросов вроде "
+            "'сравни август с июлем', "
+            "'май лучше апреля?', "
+            "'как август идёт относительно июля'."
         ),
         parameters={
             "type": "object",
@@ -266,6 +293,268 @@ FUNCTION_SPECS = [
             ],
         },
     ),
+
+    # ========================================================
+    # ПРОДАЖИ — УНИВЕРСАЛЬНАЯ АНАЛИТИКА
+    # ========================================================
+
+    ChatFunctionSpecification(
+        name="get_sales_period_summary",
+        description=(
+            "Возвращает показатели за произвольный диапазон дат. "
+            "Используй для запросов вроде "
+            "'сколько продали с апреля по июнь', "
+            "'выручка за второй квартал', "
+            "'покажи продажи с 5 по 17 августа'. "
+            "Python сам объединяет доступные дневные "
+            "и исторические месячные данные. "
+            "Если для старого диапазона нужна детализация, "
+            "которой нет, инструмент честно вернёт ошибку "
+            "insufficient_granularity и ничего не выдумает."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "start_date": {
+                    "type": "string",
+                    "description": (
+                        "Начальная дата ДД.ММ.ГГГГ"
+                    ),
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": (
+                        "Конечная дата ДД.ММ.ГГГГ"
+                    ),
+                },
+            },
+            "required": [
+                "start_date",
+                "end_date",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="compare_sales_periods",
+        description=(
+            "Сравнивает два произвольных диапазона дат. "
+            "Используй для запросов вроде "
+            "'сравни март–май с июнем–августом', "
+            "'сравни 1–15 июля с 1–15 августа', "
+            "'сравни второй квартал с первым'. "
+            "Если пользователь просто сравнивает два "
+            "календарных месяца и один из них текущий, "
+            "предпочитай compare_sales_months, потому что "
+            "он автоматически делает like-for-like."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "start_a": {
+                    "type": "string",
+                    "description": (
+                        "Начало первого периода ДД.ММ.ГГГГ"
+                    ),
+                },
+                "end_a": {
+                    "type": "string",
+                    "description": (
+                        "Конец первого периода ДД.ММ.ГГГГ"
+                    ),
+                },
+                "start_b": {
+                    "type": "string",
+                    "description": (
+                        "Начало второго периода ДД.ММ.ГГГГ"
+                    ),
+                },
+                "end_b": {
+                    "type": "string",
+                    "description": (
+                        "Конец второго периода ДД.ММ.ГГГГ"
+                    ),
+                },
+            },
+            "required": [
+                "start_a",
+                "end_a",
+                "start_b",
+                "end_b",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_sales_year_summary",
+        description=(
+            "Возвращает показатели календарного года. "
+            "Для текущего года возвращает данные "
+            "с 1 января по последний закрытый день. "
+            "Используй для вопросов вроде "
+            "'сколько заработали по выручке в 2025 году', "
+            "'какая выручка за 2026 год'. "
+            "Не называй выручку прибылью."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "year": {
+                    "type": "integer",
+                    "description": (
+                        "Календарный год"
+                    ),
+                },
+            },
+            "required": [
+                "year",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="compare_sales_years",
+        description=(
+            "Сравнивает два года по доступным данным. "
+            "Используй для запросов вроде "
+            "'сравни 2025 и 2026 годы'. "
+            "Если один год ещё не завершён, "
+            "результат содержит предупреждение об этом. "
+            "Не скрывай это предупреждение в ответе."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "year_a": {
+                    "type": "integer",
+                    "description": (
+                        "Первый год"
+                    ),
+                },
+                "year_b": {
+                    "type": "integer",
+                    "description": (
+                        "Второй год"
+                    ),
+                },
+            },
+            "required": [
+                "year_a",
+                "year_b",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="rank_sales_periods",
+        description=(
+            "Находит лучшие или худшие дни, месяцы или годы "
+            "по выбранному показателю. "
+            "Используй для запросов вроде "
+            "'самый сильный месяц по выручке', "
+            "'топ-5 дней августа', "
+            "'месяц с самым большим средним чеком', "
+            "'худшие три месяца по выручке', "
+            "'день с максимальным количеством чеков'. "
+            "granularity: day, month или year. "
+            "metric: total_revenue для выручки; "
+            "average_check для среднего чека; "
+            "checks для количества чеков; "
+            "items для количества товаров; "
+            "ktch для товаров на чек; "
+            "external_total для внешней выручки; "
+            "external_orders для внешних заказов; "
+            "check_revenue_net для нетто-выручки по чекам. "
+            "Если пользователь говорит именно о прибыли "
+            "или марже, передай metric='profit'. "
+            "Python специально откажется считать прибыль, "
+            "пока нет полной себестоимости и расходов. "
+            "Никогда не подменяй прибыль выручкой молча."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "granularity": {
+                    "type": "string",
+                    "enum": [
+                        "day",
+                        "month",
+                        "year",
+                    ],
+                    "description": (
+                        "Что ранжировать: "
+                        "day, month или year"
+                    ),
+                },
+                "metric": {
+                    "type": "string",
+                    "description": (
+                        "Показатель: total_revenue, "
+                        "average_check, checks, items, "
+                        "ktch, check_revenue_net, "
+                        "external_total, external_orders "
+                        "или profit"
+                    ),
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": (
+                        "Необязательная начальная дата "
+                        "ДД.ММ.ГГГГ"
+                    ),
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": (
+                        "Необязательная конечная дата "
+                        "ДД.ММ.ГГГГ"
+                    ),
+                },
+                "order": {
+                    "type": "string",
+                    "enum": [
+                        "desc",
+                        "asc",
+                    ],
+                    "description": (
+                        "desc — лучшие/максимальные, "
+                        "asc — худшие/минимальные"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Сколько периодов вернуть"
+                    ),
+                },
+                "min_checks": {
+                    "type": "integer",
+                    "description": (
+                        "Необязательный минимальный "
+                        "порог количества чеков. "
+                        "Полезен для рейтинга "
+                        "по среднему чеку."
+                    ),
+                },
+                "include_partial": {
+                    "type": "boolean",
+                    "description": (
+                        "Включать ли незавершённые "
+                        "месяцы или годы в рейтинг. "
+                        "По умолчанию false."
+                    ),
+                },
+            },
+            "required": [
+                "granularity",
+                "metric",
+            ],
+        },
+    ),
+
+    # ========================================================
+    # RFM
+    # ========================================================
 
     ChatFunctionSpecification(
         name="get_rfm_summary",
@@ -317,7 +606,7 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_contact_candidates",
         description=(
-            "Возвращает СПИСОК клиентов "
+            "Возвращает список клиентов "
             "для удержания или возврата. "
             "Используй, если пользователь "
             "просит несколько клиентов, "
@@ -349,14 +638,13 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_next_call_candidate",
         description=(
-            "Выбирает ОДНОГО следующего клиента "
+            "Выбирает одного следующего клиента "
             "для звонка. "
             "Клиенты, уже предложенные сегодня "
             "в этом разговоре, автоматически "
             "исключаются Python-кодом. "
             "Используй для 'кому сейчас позвонить', "
-            "'а кому ещё', 'кто следующий', "
-            "'кому после него'."
+            "'а кому ещё', 'кто следующий'."
         ),
         parameters={
             "type": "object",
@@ -371,6 +659,37 @@ FUNCTION_SPECS = [
             },
             "required": [
                 "mode",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_customer_call_assessment",
+        description=(
+            "Оценивает, стоит ли звонить "
+            "конкретному клиенту и насколько "
+            "он приоритетен для обзвона. "
+            "Используй для вопросов "
+            "'стоит ли ему звонить?', "
+            "'надо ли ей звонить?', "
+            "'насколько клиент приоритетный?'. "
+            "Приоритет рассчитывается Python-кодом. "
+            "Если истории повторных покупок мало, "
+            "инструмент не делает ложных выводов "
+            "о покупательском цикле."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": (
+                        "ID конкретного клиента в CRM"
+                    ),
+                },
+            },
+            "required": [
+                "customer_id",
             ],
         },
     ),
@@ -403,7 +722,9 @@ def build_latest_day_report():
             "ok",
 
         "day":
-            latest["day"],
+            latest[
+                "day"
+            ],
     }
 
     recent = get_recent_sales(
@@ -415,9 +736,7 @@ def build_latest_day_report():
         [],
     )
 
-    if len(
-        days
-    ) >= 2:
+    if len(days) >= 2:
         result[
             "previous_day"
         ] = days[-2]
@@ -425,8 +744,12 @@ def build_latest_day_report():
         result[
             "comparison_with_previous_day"
         ] = compare_sales_days(
-            days[-2]["date"],
-            days[-1]["date"],
+            days[-2][
+                "date"
+            ],
+            days[-1][
+                "date"
+            ],
         )
 
     return result
@@ -518,6 +841,81 @@ def run_tool(
             ],
         )
 
+    if name == "get_sales_period_summary":
+        return get_period_summary(
+            arguments[
+                "start_date"
+            ],
+            arguments[
+                "end_date"
+            ],
+        )
+
+    if name == "compare_sales_periods":
+        return compare_sales_periods(
+            arguments[
+                "start_a"
+            ],
+            arguments[
+                "end_a"
+            ],
+            arguments[
+                "start_b"
+            ],
+            arguments[
+                "end_b"
+            ],
+        )
+
+    if name == "get_sales_year_summary":
+        return get_year_summary(
+            arguments[
+                "year"
+            ]
+        )
+
+    if name == "compare_sales_years":
+        return compare_sales_years(
+            arguments[
+                "year_a"
+            ],
+            arguments[
+                "year_b"
+            ],
+        )
+
+    if name == "rank_sales_periods":
+        return rank_sales_periods(
+            granularity=arguments[
+                "granularity"
+            ],
+            metric=arguments[
+                "metric"
+            ],
+            date_from=arguments.get(
+                "date_from"
+            ),
+            date_to=arguments.get(
+                "date_to"
+            ),
+            order=arguments.get(
+                "order",
+                "desc",
+            ),
+            limit=arguments.get(
+                "limit",
+                5,
+            ),
+            min_checks=arguments.get(
+                "min_checks",
+                0,
+            ),
+            include_partial=arguments.get(
+                "include_partial",
+                False,
+            ),
+        )
+
     if name == "get_rfm_summary":
         return get_rfm_summary()
 
@@ -564,6 +962,13 @@ def run_tool(
         return get_next_call_candidate(
             mode=mode,
             exclude_customer_ids=excluded,
+        )
+
+    if name == "get_customer_call_assessment":
+        return get_customer_call_assessment(
+            arguments[
+                "customer_id"
+            ]
         )
 
     return {
@@ -714,13 +1119,30 @@ def get_tool_names():
     ]
 
 
-def demo():
+def print_short_result(
+    title,
+    result,
+):
     print()
     print("=" * 70)
-    print("AGENT TOOLS — TEST")
+    print(title)
     print("=" * 70)
     print()
 
+    print(
+        result
+    )
+
+
+def demo():
+    print()
+    print("=" * 70)
+    print(
+        "AGENT TOOLS — TEST"
+    )
+    print("=" * 70)
+
+    print()
     print(
         "Зарегистрированные инструменты:"
     )
@@ -735,85 +1157,156 @@ def demo():
         f"Всего: {len(FUNCTION_SPECS)}"
     )
 
-    print()
-    print("=" * 70)
-    print(
-        "ПОСЛЕДНИЙ ДЕНЬ"
-    )
-    print("=" * 70)
-    print()
-
-    print(
+    print_short_result(
+        "АПРЕЛЬ 2025 ПРОТИВ МАЯ 2025",
         run_tool(
-            "get_latest_sales_day",
-            {},
-            conversation_id="__agent_tools_test__",
-        )
+            "compare_sales_months",
+            {
+                "year_a":
+                    2025,
+
+                "month_a":
+                    4,
+
+                "year_b":
+                    2025,
+
+                "month_b":
+                    5,
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
     )
 
-    print()
-    print("=" * 70)
-    print(
-        "АВГУСТ ПРОТИВ ИЮЛЯ"
-    )
-    print("=" * 70)
-    print()
+    print_short_result(
+        "ПРОИЗВОЛЬНЫЙ ПЕРИОД: АПРЕЛЬ–МАЙ 2026",
+        run_tool(
+            "get_sales_period_summary",
+            {
+                "start_date":
+                    "01.04.2026",
 
-    result = run_tool(
-        "compare_sales_months",
-        {
-            "year_a":
-                2026,
-
-            "month_a":
-                7,
-
-            "year_b":
-                2026,
-
-            "month_b":
-                8,
-        },
-        conversation_id="__agent_tools_test__",
+                "end_date":
+                    "31.05.2026",
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
     )
 
-    print(
-        {
-            "status":
-                result.get(
-                    "status"
-                ),
+    print_short_result(
+        "СРАВНЕНИЕ ДВУХ ПРОИЗВОЛЬНЫХ ПЕРИОДОВ",
+        run_tool(
+            "compare_sales_periods",
+            {
+                "start_a":
+                    "01.07.2026",
 
-            "comparison_type":
-                result.get(
-                    "comparison_type"
-                ),
+                "end_a":
+                    "17.07.2026",
 
-            "comparison_end_day":
-                result.get(
-                    "comparison_end_day"
-                ),
+                "start_b":
+                    "01.08.2026",
 
-            "total_revenue":
-                result
-                .get(
-                    "metrics",
-                    {},
-                )
-                .get(
-                    "total_revenue"
-                ),
+                "end_b":
+                    "17.08.2026",
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
 
-            "checks":
-                result
-                .get(
-                    "metrics",
-                    {},
-                )
-                .get(
-                    "checks"
-                ),
-        }
+    print_short_result(
+        "2025 ГОД",
+        run_tool(
+            "get_sales_year_summary",
+            {
+                "year":
+                    2025,
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
+
+    print_short_result(
+        "ТОП-3 МЕСЯЦА ПО ВЫРУЧКЕ",
+        run_tool(
+            "rank_sales_periods",
+            {
+                "granularity":
+                    "month",
+
+                "metric":
+                    "total_revenue",
+
+                "order":
+                    "desc",
+
+                "limit":
+                    3,
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
+
+    print_short_result(
+        "ТОП-3 ДНЯ АВГУСТА ПО СРЕДНЕМУ ЧЕКУ",
+        run_tool(
+            "rank_sales_periods",
+            {
+                "granularity":
+                    "day",
+
+                "metric":
+                    "average_check",
+
+                "date_from":
+                    "01.08.2026",
+
+                "date_to":
+                    "17.08.2026",
+
+                "order":
+                    "desc",
+
+                "limit":
+                    3,
+
+                "min_checks":
+                    20,
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
+
+    print_short_result(
+        "ПРИБЫЛЬ — ДОЛЖЕН БЫТЬ ОТКАЗ",
+        run_tool(
+            "rank_sales_periods",
+            {
+                "granularity":
+                    "month",
+
+                "metric":
+                    "profit",
+
+                "limit":
+                    3,
+            },
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
     )
 
 

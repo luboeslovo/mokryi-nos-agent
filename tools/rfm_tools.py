@@ -27,11 +27,19 @@ LOST_SEGMENTS = [
 ]
 
 
+CONTACT_SELECTION_RULE = (
+    "Сначала более приоритетный RFM-сегмент, "
+    "внутри сегмента — более высокая сумма покупок, "
+    "затем просрочка цикла и частота покупок."
+)
+
+
 def to_float(value):
     try:
         return float(
             value or 0
         )
+
     except Exception:
         return 0.0
 
@@ -43,6 +51,7 @@ def to_int(value):
                 value or 0
             )
         )
+
     except Exception:
         return 0
 
@@ -170,6 +179,53 @@ def compact_customer(row):
             row.get(
                 "rfm_code"
             ),
+    }
+
+
+def get_customer_rfm(
+    customer_id,
+):
+    requested_id = str(
+        customer_id or ""
+    ).strip()
+
+    if not requested_id:
+        return {
+            "status":
+                "invalid_customer_id",
+
+            "customer_id":
+                requested_id,
+        }
+
+    for row in load_rfm():
+        row_customer_id = str(
+            row.get(
+                "customer_id"
+            )
+            or ""
+        ).strip()
+
+        if (
+            row_customer_id
+            == requested_id
+        ):
+            return {
+                "status":
+                    "ok",
+
+                "customer":
+                    compact_customer(
+                        row
+                    ),
+            }
+
+    return {
+        "status":
+            "customer_not_found",
+
+        "customer_id":
+            requested_id,
     }
 
 
@@ -446,7 +502,9 @@ def get_rfm_segment(
             real_segment,
 
         "total_in_segment":
-            len(rows),
+            len(
+                rows
+            ),
 
         "sort_by":
             sort_by,
@@ -463,18 +521,9 @@ def get_rfm_segment(
     }
 
 
-def get_contact_candidates(
-    limit=10,
-    mode="retain",
+def normalize_contact_mode(
+    mode,
 ):
-    limit = max(
-        1,
-        min(
-            int(limit),
-            100,
-        ),
-    )
-
     mode = str(
         mode
         or "retain"
@@ -486,29 +535,33 @@ def get_contact_candidates(
         "lost",
         "вернуть",
         "потерянные",
+        "потерянный",
+        "возврат",
     }:
-        selected_segments = (
-            LOST_SEGMENTS
-        )
+        return {
+            "mode":
+                "reactivate",
 
-        priority = {
-            "Потерянный ценный":
-                0,
+            "segments":
+                LOST_SEGMENTS,
 
-            "Потерянный":
-                1,
+            "priority": {
+                "Потерянный ценный":
+                    0,
+
+                "Потерянный":
+                    1,
+            },
         }
 
-        mode_name = (
-            "reactivate"
-        )
+    return {
+        "mode":
+            "retain",
 
-    else:
-        selected_segments = (
-            RISK_SEGMENTS
-        )
+        "segments":
+            RISK_SEGMENTS,
 
-        priority = {
+        "priority": {
             "Ценный под риском":
                 0,
 
@@ -520,28 +573,51 @@ def get_contact_candidates(
 
             "Остывает":
                 3,
-        }
+        },
+    }
 
-        mode_name = (
-            "retain"
-        )
+
+def get_contact_candidate_rows(
+    mode="retain",
+):
+    config = normalize_contact_mode(
+        mode
+    )
+
+    selected_segments = (
+        config[
+            "segments"
+        ]
+    )
+
+    priority = (
+        config[
+            "priority"
+        ]
+    )
 
     rows = [
         row
         for row
         in load_rfm()
-        if row.get(
-            "segment"
-        )
+        if str(
+            row.get(
+                "segment"
+            )
+            or ""
+        ).strip()
         in selected_segments
     ]
 
     rows.sort(
         key=lambda row: (
             priority.get(
-                row.get(
-                    "segment"
-                ),
+                str(
+                    row.get(
+                        "segment"
+                    )
+                    or ""
+                ).strip(),
                 999,
             ),
 
@@ -566,30 +642,149 @@ def get_contact_candidates(
     )
 
     return {
+        "mode":
+            config[
+                "mode"
+            ],
+
+        "segments":
+            selected_segments,
+
+        "rows":
+            rows,
+    }
+
+
+def get_contact_candidate_pool(
+    mode="retain",
+):
+    """
+    Внутренний полный пул кандидатов.
+
+    ВАЖНО:
+    здесь НЕТ ограничения в 100 клиентов.
+
+    Эта функция нужна call_tools.py, чтобы сначала
+    посчитать call score для ВСЕХ подходящих клиентов,
+    а уже потом выбрать действительно лучшего.
+    """
+
+    payload = (
+        get_contact_candidate_rows(
+            mode
+        )
+    )
+
+    rows = payload[
+        "rows"
+    ]
+
+    return {
         "status":
             "ok",
 
         "mode":
-            mode_name,
+            payload[
+                "mode"
+            ],
 
         "included_segments":
-            selected_segments,
+            payload[
+                "segments"
+            ],
 
-        "selection_rule": (
-            "Сначала более приоритетный RFM-сегмент, "
-            "внутри сегмента — более высокая сумма покупок, "
-            "затем просрочка цикла и частота покупок."
-        ),
+        "selection_rule":
+            CONTACT_SELECTION_RULE,
+
+        "total_candidates":
+            len(
+                rows
+            ),
 
         "customers": [
             compact_customer(
                 row
             )
             for row
-            in rows[
-                :limit
-            ]
+            in rows
         ],
+    }
+
+
+def get_contact_candidates(
+    limit=10,
+    mode="retain",
+):
+    """
+    Публичный инструмент для агента.
+
+    Здесь лимит до 100 сохраняем специально:
+    пользователю не нужно возвращать сотни клиентов
+    одним сообщением.
+
+    Полный пул для внутреннего скоринга берётся через
+    get_contact_candidate_pool().
+    """
+
+    limit = max(
+        1,
+        min(
+            int(limit),
+            100,
+        ),
+    )
+
+    pool = (
+        get_contact_candidate_pool(
+            mode
+        )
+    )
+
+    customers = pool.get(
+        "customers",
+        [],
+    )
+
+    return {
+        "status":
+            "ok",
+
+        "mode":
+            pool.get(
+                "mode"
+            ),
+
+        "included_segments":
+            pool.get(
+                "included_segments",
+                [],
+            ),
+
+        "selection_rule":
+            pool.get(
+                "selection_rule"
+            ),
+
+        "total_candidates":
+            pool.get(
+                "total_candidates",
+                len(
+                    customers
+                ),
+            ),
+
+        "returned_candidates":
+            min(
+                limit,
+                len(
+                    customers
+                ),
+            ),
+
+        "customers":
+            customers[
+                :limit
+            ],
     }
 
 
@@ -600,6 +795,17 @@ def demo():
         "RFM TOOLS — TEST"
     )
     print("=" * 70)
+
+    print()
+    print(
+        "RFM конкретного клиента:"
+    )
+
+    print(
+        get_customer_rfm(
+            "1000446"
+        )
+    )
 
     summary = (
         get_rfm_summary()
@@ -615,28 +821,130 @@ def demo():
     )
 
     print()
+    print("=" * 70)
     print(
-        "Топ-5 клиентов для удержания:"
+        "ПОЛНЫЙ ПУЛ ДЛЯ УДЕРЖАНИЯ"
+    )
+    print("=" * 70)
+
+    retain_pool = (
+        get_contact_candidate_pool(
+            mode="retain"
+        )
     )
 
     print(
+        "Всего кандидатов:",
+        retain_pool.get(
+            "total_candidates"
+        ),
+    )
+
+    print(
+        "RFM risk_customers:",
+        summary.get(
+            "risk_customers"
+        ),
+    )
+
+    print(
+        "Совпадает:",
+        (
+            retain_pool.get(
+                "total_candidates"
+            )
+            == summary.get(
+                "risk_customers"
+            )
+        ),
+    )
+
+    print()
+    print("=" * 70)
+    print(
+        "ПУБЛИЧНЫЙ ЛИМИТ 500 — ДОЛЖЕН ВЕРНУТЬ НЕ БОЛЕЕ 100"
+    )
+    print("=" * 70)
+
+    public_retain = (
         get_contact_candidates(
-            limit=5,
+            limit=500,
             mode="retain",
         )
     )
 
-    print()
     print(
-        "Топ-5 потерянных для возврата:"
+        "Всего в полном пуле:",
+        public_retain.get(
+            "total_candidates"
+        ),
     )
 
     print(
-        get_contact_candidates(
-            limit=5,
-            mode="reactivate",
+        "Вернулось пользователю:",
+        len(
+            public_retain.get(
+                "customers",
+                [],
+            )
+        ),
+    )
+
+    print()
+    print("=" * 70)
+    print(
+        "ПОЛНЫЙ ПУЛ ПОТЕРЯННЫХ"
+    )
+    print("=" * 70)
+
+    lost_pool = (
+        get_contact_candidate_pool(
+            mode="reactivate"
         )
     )
+
+    print(
+        "Всего кандидатов:",
+        lost_pool.get(
+            "total_candidates"
+        ),
+    )
+
+    print(
+        "RFM lost_customers:",
+        summary.get(
+            "lost_customers"
+        ),
+    )
+
+    print(
+        "Совпадает:",
+        (
+            lost_pool.get(
+                "total_candidates"
+            )
+            == summary.get(
+                "lost_customers"
+            )
+        ),
+    )
+
+    print()
+    print("=" * 70)
+    print(
+        "ПЕРВЫЕ 5 ДЛЯ УДЕРЖАНИЯ"
+    )
+    print("=" * 70)
+
+    for customer in (
+        retain_pool.get(
+            "customers",
+            [],
+        )[:5]
+    ):
+        print(
+            customer
+        )
 
 
 if __name__ == "__main__":

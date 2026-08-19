@@ -1,4 +1,7 @@
+import calendar
 import json
+import re
+from datetime import datetime
 
 import keyring
 
@@ -21,24 +24,37 @@ from agent_tools import (
 )
 
 from agent_followups import (
+    is_customer_list_call_followup,
     is_last_call_reason_followup,
     is_next_call_followup,
 )
 
 from sales_renderer import (
-    render_month_comparison,
+    render_sales_tool_result,
 )
 
 from call_renderer import (
+    render_customer_call_assessment,
     render_last_call_reason,
     render_next_call_card,
 )
 
+from customer_list_renderer import (
+    render_customer_list_call_assessment,
+)
+
+from customer_renderer import (
+    render_customer_profile,
+    render_customer_search_result,
+)
+
 from memory_tools import (
     get_last_call_suggestion,
+    get_last_customer_list,
     get_recent_messages,
     get_state,
     record_call_suggestion,
+    save_last_customer_list,
     save_message,
     set_state,
 )
@@ -52,6 +68,104 @@ MODEL = "GigaChat-3-Ultra"
 
 CONTEXT_MESSAGES = 10
 MAX_CONTEXT_MESSAGE_LENGTH = 2500
+
+
+DETERMINISTIC_SALES_TOOLS = {
+    "compare_sales_months",
+    "get_sales_period_summary",
+    "compare_sales_periods",
+    "get_sales_year_summary",
+    "compare_sales_years",
+    "rank_sales_periods",
+}
+
+
+MONTH_PATTERNS = [
+    (
+        re.compile(
+            r"\bянвар(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        1,
+    ),
+    (
+        re.compile(
+            r"\bфеврал(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        2,
+    ),
+    (
+        re.compile(
+            r"\bмарт(?:а|е|ом)?\b",
+            re.IGNORECASE,
+        ),
+        3,
+    ),
+    (
+        re.compile(
+            r"\bапрел(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        4,
+    ),
+    (
+        re.compile(
+            r"\b(?:май|мая|мае|маем)\b",
+            re.IGNORECASE,
+        ),
+        5,
+    ),
+    (
+        re.compile(
+            r"\bиюн(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        6,
+    ),
+    (
+        re.compile(
+            r"\bиюл(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        7,
+    ),
+    (
+        re.compile(
+            r"\bавгуст(?:а|е|ом)?\b",
+            re.IGNORECASE,
+        ),
+        8,
+    ),
+    (
+        re.compile(
+            r"\bсентябр(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        9,
+    ),
+    (
+        re.compile(
+            r"\bоктябр(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        10,
+    ),
+    (
+        re.compile(
+            r"\bноябр(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        11,
+    ),
+    (
+        re.compile(
+            r"\bдекабр(?:ь|я|е|ем)?\b",
+            re.IGNORECASE,
+        ),
+        12,
+    ),
+]
 
 
 def get_authorization_key():
@@ -178,16 +292,26 @@ def normalize_arguments(arguments):
         arguments,
         dict,
     ):
-        return arguments
+        return dict(
+            arguments
+        )
 
     if isinstance(
         arguments,
         str,
     ):
         try:
-            return json.loads(
+            result = json.loads(
                 arguments
             )
+
+            if isinstance(
+                result,
+                dict,
+            ):
+                return result
+
+            return {}
 
         except json.JSONDecodeError:
             return {}
@@ -286,6 +410,412 @@ def get_latest_data_date():
     return None
 
 
+def parse_latest_date(
+    latest_data_date,
+):
+    if not latest_data_date:
+        return None
+
+    try:
+        return datetime.strptime(
+            str(
+                latest_data_date
+            ),
+            "%d.%m.%Y",
+        ).date()
+
+    except Exception:
+        return None
+
+
+def detect_month_from_text(text):
+    text = (
+        str(
+            text or ""
+        )
+        .lower()
+        .replace(
+            "ё",
+            "е",
+        )
+    )
+
+    for pattern, month in MONTH_PATTERNS:
+        if pattern.search(
+            text
+        ):
+            return month
+
+    return None
+
+
+def detect_year_from_text(
+    text,
+    default_year=None,
+):
+    matches = re.findall(
+        r"\b(20\d{2})\b",
+        str(
+            text or ""
+        ),
+    )
+
+    if matches:
+        return int(
+            matches[-1]
+        )
+
+    return default_year
+
+
+def detect_requested_limit(
+    question,
+    current_limit=None,
+):
+    text = (
+        str(
+            question or ""
+        )
+        .lower()
+        .replace(
+            "ё",
+            "е",
+        )
+    )
+
+    top_match = re.search(
+        r"\bтоп\s*[-–—]?\s*(\d+)\b",
+        text,
+    )
+
+    if top_match:
+        return max(
+            1,
+            min(
+                int(
+                    top_match.group(1)
+                ),
+                100,
+            ),
+        )
+
+    count_match = re.search(
+        (
+            r"\b(\d+)\s+"
+            r"(?:самых|лучших|худших|"
+            r"сильных|слабых|дней|месяцев|лет)\b"
+        ),
+        text,
+    )
+
+    if count_match:
+        return max(
+            1,
+            min(
+                int(
+                    count_match.group(1)
+                ),
+                100,
+            ),
+        )
+
+    plural_markers = [
+        "какие дни",
+        "какие месяцы",
+        "какие годы",
+        "лучшие дни",
+        "лучшие месяцы",
+        "лучшие годы",
+        "худшие дни",
+        "худшие месяцы",
+        "худшие годы",
+        "несколько дней",
+        "несколько месяцев",
+        "несколько лет",
+        "рейтинг",
+        "топ ",
+        "топ-",
+    ]
+
+    if any(
+        marker in text
+        for marker in plural_markers
+    ):
+        if current_limit is not None:
+            return current_limit
+
+        return 5
+
+    singular_markers = [
+        "какой день",
+        "какой месяц",
+        "какой год",
+        "какая дата",
+        "самый сильный",
+        "самый слабый",
+        "самый большой",
+        "самый высокий",
+        "самый низкий",
+        "максимальный",
+        "минимальный",
+        "максимум",
+        "минимум",
+    ]
+
+    if any(
+        marker in text
+        for marker in singular_markers
+    ):
+        return 1
+
+    if current_limit is not None:
+        return current_limit
+
+    return 5
+
+
+def normalize_rank_arguments(
+    question,
+    arguments,
+    latest_data_date,
+):
+    result = dict(
+        arguments
+        or {}
+    )
+
+    granularity = (
+        str(
+            result.get(
+                "granularity",
+                "",
+            )
+        )
+        .strip()
+        .lower()
+    )
+
+    latest_date = (
+        parse_latest_date(
+            latest_data_date
+        )
+    )
+
+    default_year = (
+        latest_date.year
+        if latest_date
+        else None
+    )
+
+    requested_year = (
+        detect_year_from_text(
+            question,
+            default_year=default_year,
+        )
+    )
+
+    requested_month = (
+        detect_month_from_text(
+            question
+        )
+    )
+
+    result[
+        "limit"
+    ] = detect_requested_limit(
+        question,
+        current_limit=result.get(
+            "limit"
+        ),
+    )
+
+    # ========================================================
+    # РЕЙТИНГ ДНЕЙ
+    #
+    # Если пользователь назвал месяц, Python сам задаёт
+    # границы этого месяца. Не полагаемся на то, что LLM
+    # обязательно передаст date_from/date_to.
+    # ========================================================
+
+    if (
+        granularity
+        == "day"
+        and requested_month is not None
+        and requested_year is not None
+    ):
+        days_in_month = (
+            calendar.monthrange(
+                requested_year,
+                requested_month,
+            )[1]
+        )
+
+        start_date = datetime(
+            requested_year,
+            requested_month,
+            1,
+        ).date()
+
+        end_date = datetime(
+            requested_year,
+            requested_month,
+            days_in_month,
+        ).date()
+
+        if (
+            latest_date is not None
+            and requested_year
+            == latest_date.year
+            and requested_month
+            == latest_date.month
+            and latest_date
+            < end_date
+        ):
+            end_date = (
+                latest_date
+            )
+
+        result[
+            "date_from"
+        ] = start_date.strftime(
+            "%d.%m.%Y"
+        )
+
+        result[
+            "date_to"
+        ] = end_date.strftime(
+            "%d.%m.%Y"
+        )
+
+    # ========================================================
+    # РЕЙТИНГ ДНЕЙ ЗА ГОД
+    # ========================================================
+
+    elif (
+        granularity
+        == "day"
+        and requested_year is not None
+        and re.search(
+            r"\b20\d{2}\b",
+            str(
+                question
+            ),
+        )
+    ):
+        start_date = datetime(
+            requested_year,
+            1,
+            1,
+        ).date()
+
+        end_date = datetime(
+            requested_year,
+            12,
+            31,
+        ).date()
+
+        if (
+            latest_date is not None
+            and requested_year
+            == latest_date.year
+            and latest_date
+            < end_date
+        ):
+            end_date = (
+                latest_date
+            )
+
+        result[
+            "date_from"
+        ] = start_date.strftime(
+            "%d.%m.%Y"
+        )
+
+        result[
+            "date_to"
+        ] = end_date.strftime(
+            "%d.%m.%Y"
+        )
+
+    # ========================================================
+    # РЕЙТИНГ МЕСЯЦЕВ ВНУТРИ КОНКРЕТНОГО ГОДА
+    # ========================================================
+
+    elif (
+        granularity
+        == "month"
+        and requested_year is not None
+        and re.search(
+            r"\b20\d{2}\b",
+            str(
+                question
+            ),
+        )
+    ):
+        start_date = datetime(
+            requested_year,
+            1,
+            1,
+        ).date()
+
+        end_date = datetime(
+            requested_year,
+            12,
+            31,
+        ).date()
+
+        if (
+            latest_date is not None
+            and requested_year
+            == latest_date.year
+            and latest_date
+            < end_date
+        ):
+            end_date = (
+                latest_date
+            )
+
+        result[
+            "date_from"
+        ] = start_date.strftime(
+            "%d.%m.%Y"
+        )
+
+        result[
+            "date_to"
+        ] = end_date.strftime(
+            "%d.%m.%Y"
+        )
+
+    return result
+
+
+def normalize_tool_arguments(
+    tool_name,
+    question,
+    arguments,
+    latest_data_date,
+):
+    result = dict(
+        arguments
+        or {}
+    )
+
+    if (
+        tool_name
+        == "rank_sales_periods"
+    ):
+        result = (
+            normalize_rank_arguments(
+                question,
+                result,
+                latest_data_date,
+            )
+        )
+
+    return result
+
+
 def record_call_result(
     conversation_id,
     result,
@@ -358,6 +888,38 @@ def get_last_call_result(
         return None
 
 
+def record_top_customer_list(
+    conversation_id,
+    result,
+):
+    customers = result.get(
+        "customers",
+        [],
+    )
+
+    if not isinstance(
+        customers,
+        list,
+    ):
+        return
+
+    if not customers:
+        return
+
+    visible_customers = customers[:5]
+
+    save_last_customer_list(
+        conversation_id,
+        visible_customers,
+        source_tool="get_top_customers",
+    )
+
+    print(
+        "[memory] сохранён последний список клиентов: "
+        f"{len(visible_customers)}"
+    )
+
+
 def handle_next_call_followup(
     conversation_id,
 ):
@@ -414,16 +976,127 @@ def handle_last_call_reason(
     )
 
 
+def handle_customer_list_call_followup(
+    conversation_id,
+):
+    payload = get_last_customer_list(
+        conversation_id
+    )
+
+    if not payload:
+        return render_customer_list_call_assessment(
+            {
+                "status":
+                    "error",
+
+                "error":
+                    "no_customer_list",
+            }
+        )
+
+    customers = payload.get(
+        "customers",
+        [],
+    )
+
+    if not customers:
+        return render_customer_list_call_assessment(
+            {
+                "status":
+                    "error",
+
+                "error":
+                    "empty_customer_list",
+            }
+        )
+
+    print(
+        "[memory] оцениваем звонки "
+        "по последнему списку клиентов"
+    )
+
+    assessments = []
+
+    for customer in customers:
+        customer_id = customer.get(
+            "customer_id"
+        )
+
+        if not customer_id:
+            continue
+
+        try:
+            assessment = run_tool(
+                "get_customer_call_assessment",
+                {
+                    "customer_id":
+                        customer_id,
+                },
+                conversation_id=conversation_id,
+            )
+
+        except Exception as error:
+            assessment = {
+                "status":
+                    "error",
+
+                "customer_id":
+                    str(customer_id),
+
+                "error":
+                    (
+                        f"{type(error).__name__}: "
+                        f"{error}"
+                    ),
+            }
+
+        assessments.append(
+            assessment
+        )
+
+    result = {
+        "status":
+            "ok",
+
+        "source_tool":
+            payload.get(
+                "source_tool"
+            ),
+
+        "assessments":
+            assessments,
+    }
+
+    return render_customer_list_call_assessment(
+        result
+    )
+
+
+def save_and_return(
+    conversation_id,
+    answer,
+):
+    save_message(
+        conversation_id,
+        "assistant",
+        answer,
+    )
+
+    return answer
+
+
 def answer_question(
     question,
     conversation_id="console",
 ):
     conversation_id = str(
-        conversation_id or "console"
+        conversation_id
+        or "console"
     )
 
     question = str(
-        question or ""
+        question
+        or ""
     ).strip()
 
     if not question:
@@ -449,37 +1122,58 @@ def answer_question(
         question,
     )
 
+    # ========================================================
+    # ДЕТЕРМИНИРОВАННЫЕ FOLLOW-UP ПО ПАМЯТИ
+    # ========================================================
+
+    if is_customer_list_call_followup(
+        question,
+        conversation_id,
+    ):
+        answer = (
+            handle_customer_list_call_followup(
+                conversation_id
+            )
+        )
+
+        return save_and_return(
+            conversation_id,
+            answer,
+        )
+
     if is_next_call_followup(
         question,
         conversation_id,
     ):
-        answer = handle_next_call_followup(
-            conversation_id
+        answer = (
+            handle_next_call_followup(
+                conversation_id
+            )
         )
 
-        save_message(
+        return save_and_return(
             conversation_id,
-            "assistant",
             answer,
         )
-
-        return answer
 
     if is_last_call_reason_followup(
         question,
         conversation_id,
     ):
-        answer = handle_last_call_reason(
-            conversation_id
+        answer = (
+            handle_last_call_reason(
+                conversation_id
+            )
         )
 
-        save_message(
+        return save_and_return(
             conversation_id,
-            "assistant",
             answer,
         )
 
-        return answer
+    # ========================================================
+    # GIGACHAT ВЫБИРАЕТ ИНСТРУМЕНТ
+    # ========================================================
 
     latest_data_date = (
         get_latest_data_date()
@@ -541,13 +1235,10 @@ def answer_question(
                 "Не получилось сформировать ответ."
             )
 
-        save_message(
+        return save_and_return(
             conversation_id,
-            "assistant",
             answer,
         )
-
-        return answer
 
     tool_name = (
         function_call.name
@@ -557,9 +1248,32 @@ def answer_question(
         function_call.arguments
     )
 
+    # ========================================================
+    # ДЕТЕРМИНИРОВАННАЯ ПРОВЕРКА АРГУМЕНТОВ
+    #
+    # LLM выбирает инструмент, но Python страхует
+    # важные фильтры. Например:
+    #
+    # "какой день августа..."
+    #
+    # Даже если GigaChat забыл date_from/date_to,
+    # Python сам ограничит рейтинг августом.
+    # ========================================================
+
+    arguments = normalize_tool_arguments(
+        tool_name,
+        question,
+        arguments,
+        latest_data_date,
+    )
+
     print(
         f"[tool] {tool_name}({arguments})"
     )
+
+    # ========================================================
+    # PYTHON СЧИТАЕТ ФАКТЫ
+    # ========================================================
 
     try:
         tool_result = run_tool(
@@ -585,6 +1299,19 @@ def answer_question(
         tool_result,
     )
 
+    # ========================================================
+    # ПАМЯТЬ СПИСКОВ / ЗВОНКОВ
+    # ========================================================
+
+    if (
+        tool_name
+        == "get_top_customers"
+    ):
+        record_top_customer_list(
+            conversation_id,
+            real_data,
+        )
+
     if (
         tool_name
         == "get_next_call_candidate"
@@ -594,33 +1321,100 @@ def answer_question(
             real_data,
         )
 
-        answer = render_next_call_card(
-            real_data
+        answer = (
+            render_next_call_card(
+                real_data
+            )
         )
 
-        save_message(
+        return save_and_return(
             conversation_id,
-            "assistant",
             answer,
         )
 
-        return answer
+    # ========================================================
+    # ДЕТЕРМИНИРОВАННЫЙ РЕНДЕР ЗВОНКОВ
+    # ========================================================
 
     if (
         tool_name
-        == "compare_sales_months"
+        == "get_customer_call_assessment"
     ):
-        answer = render_month_comparison(
-            real_data
+        answer = (
+            render_customer_call_assessment(
+                real_data
+            )
         )
 
-        save_message(
+        return save_and_return(
             conversation_id,
-            "assistant",
             answer,
         )
 
-        return answer
+    # ========================================================
+    # ДЕТЕРМИНИРОВАННЫЙ РЕНДЕР ПРОДАЖ
+    # ========================================================
+
+    if (
+        tool_name
+        in DETERMINISTIC_SALES_TOOLS
+    ):
+        answer = (
+            render_sales_tool_result(
+                tool_name,
+                real_data,
+            )
+        )
+
+        if not answer:
+            answer = (
+                "Не получилось корректно "
+                "сформировать ответ по продажам."
+            )
+
+        return save_and_return(
+            conversation_id,
+            answer,
+        )
+
+    # ========================================================
+    # ДЕТЕРМИНИРОВАННЫЙ РЕНДЕР КЛИЕНТОВ
+    # ========================================================
+
+    if (
+        tool_name
+        == "get_customer_profile"
+    ):
+        answer = (
+            render_customer_profile(
+                real_data
+            )
+        )
+
+        return save_and_return(
+            conversation_id,
+            answer,
+        )
+
+    if (
+        tool_name
+        == "find_customer_by_name"
+    ):
+        answer = (
+            render_customer_search_result(
+                real_data
+            )
+        )
+
+        return save_and_return(
+            conversation_id,
+            answer,
+        )
+
+    # ========================================================
+    # ОСТАЛЬНЫЕ ИНСТРУМЕНТЫ:
+    # GIGACHAT ФОРМУЛИРУЕТ ОТВЕТ ТОЛЬКО ИЗ REAL_DATA
+    # ========================================================
 
     real_data_json = json.dumps(
         real_data,
@@ -674,34 +1468,31 @@ def answer_question(
             "Не получилось сформировать ответ."
         )
 
-    save_message(
+    return save_and_return(
         conversation_id,
-        "assistant",
         answer,
     )
 
-    return answer
 
-
-def demo():
+def run_demo_question(
+    number,
+    question,
+):
     conversation_id = (
-        "__agent_core_test__"
+        f"__agent_core_sales_test_{number}__"
     )
 
     print()
-    print("=" * 70)
+    print("=" * 78)
     print(
-        "AGENT CORE — TEST"
+        f"ТЕСТ {number}"
     )
-    print("=" * 70)
+    print("=" * 78)
+
     print()
-
-    question = (
-        "сравни август с июлем"
-    )
-
     print(
-        f"Вопрос: {question}"
+        "Вопрос:",
+        question,
     )
 
     print()
@@ -710,14 +1501,66 @@ def demo():
     )
     print()
 
-    answer = answer_question(
-        question,
-        conversation_id=conversation_id,
-    )
+    try:
+        answer = answer_question(
+            question,
+            conversation_id=conversation_id,
+        )
 
+        print(
+            answer
+        )
+
+    except Exception as error:
+        print(
+            "ОШИБКА:",
+            type(error).__name__,
+            error,
+        )
+
+
+def demo():
+    print()
+    print("=" * 78)
     print(
-        answer
+        "AGENT CORE — UNIVERSAL SALES TEST"
     )
+    print("=" * 78)
+
+    questions = [
+        (
+            "сравни апрель с маем"
+        ),
+        (
+            "сколько выручки было "
+            "за весь 2025 год?"
+        ),
+        (
+            "какой месяц был самым сильным "
+            "по выручке?"
+        ),
+        (
+            "какой день августа был "
+            "с самым большим средним чеком?"
+        ),
+        (
+            "сравни период с 1 по 17 июля "
+            "с периодом с 1 по 17 августа"
+        ),
+        (
+            "какой месяц был "
+            "самым прибыльным?"
+        ),
+    ]
+
+    for number, question in enumerate(
+        questions,
+        start=1,
+    ):
+        run_demo_question(
+            number,
+            question,
+        )
 
 
 if __name__ == "__main__":

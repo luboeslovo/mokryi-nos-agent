@@ -2,6 +2,7 @@ import re
 
 from memory_tools import (
     get_last_call_suggestion,
+    get_last_customer_list,
 )
 
 
@@ -155,6 +156,47 @@ def is_last_call_reason_text(
     )
 
 
+def is_customer_list_call_followup_text(
+    question,
+):
+    text = normalize_text(
+        question
+    )
+
+    group_references = [
+        "из них",
+        "среди них",
+        "из этих клиентов",
+        "среди этих клиентов",
+        "из этого списка",
+        "в этом списке",
+    ]
+
+    has_group_reference = any(
+        reference in text
+        for reference in group_references
+    )
+
+    if not has_group_reference:
+        return False
+
+    call_markers = [
+        "звон",
+        "позвон",
+        "обзвон",
+    ]
+
+    has_call_intent = any(
+        marker in text
+        for marker in call_markers
+    )
+
+    if not has_call_intent:
+        return False
+
+    return True
+
+
 def has_last_call(
     conversation_id,
 ):
@@ -162,6 +204,26 @@ def has_last_call(
         get_last_call_suggestion(
             conversation_id
         )
+    )
+
+
+def has_last_customer_list(
+    conversation_id,
+):
+    payload = get_last_customer_list(
+        conversation_id
+    )
+
+    if not payload:
+        return False
+
+    customers = payload.get(
+        "customers",
+        [],
+    )
+
+    return bool(
+        customers
     )
 
 
@@ -193,6 +255,20 @@ def is_last_call_reason_followup(
     )
 
 
+def is_customer_list_call_followup(
+    question,
+    conversation_id,
+):
+    if not has_last_customer_list(
+        conversation_id
+    ):
+        return False
+
+    return is_customer_list_call_followup_text(
+        question
+    )
+
+
 def demo():
     next_call_tests = [
         "а кому дальше?",
@@ -208,6 +284,16 @@ def demo():
         "почему именно ему?",
         "почему ты её выбрал?",
         "почему этот клиент?",
+    ]
+
+    customer_list_call_tests = [
+        "а кому-то из них нужно звонить?",
+        "кому из них стоит позвонить?",
+        "кого из них обзвонить?",
+        "кто из них в приоритете для звонка?",
+        "есть среди них те, кому надо звонить?",
+        "а что они покупали?",
+        "кто из них потратил больше?",
     ]
 
     print()
@@ -231,6 +317,15 @@ def demo():
         print(
             f"{value!r} -> "
             f"{is_last_call_reason_text(value)}"
+        )
+
+    print()
+    print("Звонок кому-то из последнего списка:")
+
+    for value in customer_list_call_tests:
+        print(
+            f"{value!r} -> "
+            f"{is_customer_list_call_followup_text(value)}"
         )
 
 

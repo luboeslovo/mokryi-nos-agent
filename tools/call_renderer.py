@@ -415,8 +415,220 @@ def render_last_call_reason(result):
     return "\n".join(lines)
 
 
+def render_customer_call_assessment(result):
+    if (
+        not result
+        or result.get("status") != "ok"
+    ):
+        return (
+            "Не получилось оценить приоритет "
+            "звонка этому клиенту."
+        )
+
+    customer = result.get(
+        "customer",
+        {},
+    )
+
+    priority = result.get(
+        "priority",
+        {},
+    )
+
+    components = result.get(
+        "score_components",
+        {},
+    )
+
+    cycle_signal = result.get(
+        "cycle_signal",
+        {},
+    )
+
+    first_name = str(
+        customer.get("name", "")
+        or ""
+    ).strip()
+
+    last_name = str(
+        customer.get("lastname", "")
+        or ""
+    ).strip()
+
+    if first_name or last_name:
+        name = format_customer_name(
+            f"{first_name} {last_name}"
+        )
+    else:
+        name = format_customer_name(
+            customer.get("full_name")
+        )
+
+    frequency = int(
+        customer.get("frequency", 0)
+        or 0
+    )
+
+    score = priority.get(
+        "score",
+        0,
+    )
+
+    priority_label = priority.get(
+        "label",
+        "",
+    )
+
+    recommendation = priority.get(
+        "recommendation",
+        "",
+    )
+
+    segment = customer.get(
+        "segment",
+        "",
+    )
+
+    recency_days = customer.get(
+        "recency_days",
+        0,
+    )
+
+    monetary = format_money(
+        customer.get(
+            "monetary",
+            0,
+        )
+    )
+
+    average_check = format_money(
+        customer.get(
+            "average_check",
+            0,
+        )
+    )
+
+    lines = []
+
+    lines.append(
+        f"{name}: приоритет звонка — "
+        f"{priority_label.lower()} "
+        f"({score}/100)."
+    )
+
+    lines.append("")
+
+    if recommendation:
+        lines.append(
+            recommendation
+        )
+
+        lines.append("")
+
+    lines.append(
+        "Почему:"
+    )
+
+    lines.append(
+        f"• Сегмент «{segment}» — "
+        f"{components.get('segment', 0)} баллов."
+    )
+
+    lines.append(
+        f"• История покупок: {frequency} "
+        f"{purchase_word(frequency)} "
+        f"на общую сумму {monetary}, "
+        f"средний чек — {average_check}. "
+        f"Компонент ценности — "
+        f"{components.get('customer_value', 0)} балла."
+    )
+
+    lines.append(
+        f"• Частота покупок — "
+        f"{components.get('purchase_frequency', 0)} балла."
+    )
+
+    lines.append(
+        f"• Последняя покупка была "
+        f"{recency_days} дней назад."
+    )
+
+    if cycle_signal.get(
+        "available"
+    ):
+        average_interval = customer.get(
+            "average_interval_days",
+            0,
+        )
+
+        overdue = customer.get(
+            "cycle_overdue_ratio",
+            0,
+        )
+
+        lines.append(
+            f"• Обычный интервал между покупками — "
+            f"примерно {average_interval} дня; "
+            f"текущая пауза примерно в "
+            f"{overdue} раза длиннее этого интервала. "
+            f"Компонент паузы — "
+            f"{components.get('cycle_overdue', 0)} балла."
+        )
+
+    else:
+        lines.append(
+            "• Подтверждённого покупательского цикла нет: "
+            "истории повторных покупок недостаточно. "
+            "Поэтому нельзя утверждать, что текущая пауза "
+            "аномальна относительно обычного поведения клиента. "
+            f"Компонент паузы — "
+            f"{components.get('cycle_overdue', 0)} баллов."
+        )
+
+    lines.append("")
+
+    lines.append(
+        "Что это значит:"
+    )
+
+    if priority.get(
+        "level"
+    ) == "high":
+        lines.append(
+            "Клиента имеет смысл поставить "
+            "в начало очереди на обзвон."
+        )
+
+    elif priority.get(
+        "level"
+    ) == "medium":
+        lines.append(
+            "Позвонить имеет смысл, "
+            "но есть клиенты с более сильным приоритетом."
+        )
+
+    else:
+        lines.append(
+            "Позвонить можно, но я бы сначала обзвонил "
+            "клиентов с более сильной историей покупок "
+            "и более высоким score."
+        )
+
+    lines.append("")
+
+    lines.append(
+        "Причину отсутствия клиента мы не знаем. "
+        "Из этих данных нельзя делать выводы "
+        "о текущей потребности, животном клиента "
+        "или причине, по которой он перестал покупать."
+    )
+
+    return "\n".join(lines)
+
+
 def demo():
     from call_tools import (
+        get_customer_call_assessment,
         get_next_call_candidate,
     )
 
@@ -446,6 +658,24 @@ def demo():
     print(
         render_last_call_reason(
             result
+        )
+    )
+
+    print()
+    print("=" * 70)
+    print("ОЦЕНКА КОНКРЕТНОГО КЛИЕНТА")
+    print("=" * 70)
+    print()
+
+    assessment = (
+        get_customer_call_assessment(
+            "1000446"
+        )
+    )
+
+    print(
+        render_customer_call_assessment(
+            assessment
         )
     )
 

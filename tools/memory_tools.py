@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from datetime import datetime
@@ -299,6 +300,139 @@ def get_state(
     return row["value"]
 
 
+def save_last_customer_list(
+    conversation_id,
+    customers,
+    source_tool=None,
+):
+    clean_customers = []
+
+    for customer in customers or []:
+        customer_id = customer.get(
+            "customer_id"
+        )
+
+        if not customer_id:
+            continue
+
+        name = str(
+            customer.get(
+                "name",
+                "",
+            )
+            or ""
+        ).strip()
+
+        lastname = str(
+            customer.get(
+                "lastname",
+                "",
+            )
+            or ""
+        ).strip()
+
+        full_name = str(
+            customer.get(
+                "full_name",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not full_name:
+            full_name = " ".join(
+                part
+                for part in [
+                    name,
+                    lastname,
+                ]
+                if part
+            ).strip()
+
+        clean_customers.append(
+            {
+                "customer_id":
+                    str(customer_id),
+
+                "name":
+                    name,
+
+                "lastname":
+                    lastname,
+
+                "full_name":
+                    full_name,
+
+                "position":
+                    customer.get(
+                        "position"
+                    ),
+            }
+        )
+
+    payload = {
+        "source_tool":
+            str(source_tool or ""),
+
+        "customers":
+            clean_customers,
+    }
+
+    set_state(
+        conversation_id,
+        "last_customer_list_json",
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
+        ),
+    )
+
+    return payload
+
+
+def get_last_customer_list(
+    conversation_id,
+):
+    raw = get_state(
+        conversation_id,
+        "last_customer_list_json",
+        default=None,
+    )
+
+    if not raw:
+        return None
+
+    try:
+        payload = json.loads(
+            raw
+        )
+
+    except Exception:
+        return None
+
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        return None
+
+    customers = payload.get(
+        "customers"
+    )
+
+    if not isinstance(
+        customers,
+        list,
+    ):
+        return None
+
+    return payload
+
+
 def record_call_suggestion(
     conversation_id,
     customer_id,
@@ -496,6 +630,39 @@ def demo():
         mode="retain",
     )
 
+    save_last_customer_list(
+        test_id,
+        [
+            {
+                "position":
+                    1,
+
+                "customer_id":
+                    "111",
+
+                "name":
+                    "Сергей",
+
+                "lastname":
+                    "Зверев",
+            },
+            {
+                "position":
+                    2,
+
+                "customer_id":
+                    "222",
+
+                "name":
+                    "Никита",
+
+                "lastname":
+                    "Янцев",
+            },
+        ],
+        source_tool="get_top_customers",
+    )
+
     print()
     print("=" * 70)
     print(
@@ -532,6 +699,17 @@ def demo():
 
     print(
         get_today_suggested_customer_ids(
+            test_id
+        )
+    )
+
+    print()
+    print(
+        "Последний список клиентов:"
+    )
+
+    print(
+        get_last_customer_list(
             test_id
         )
     )

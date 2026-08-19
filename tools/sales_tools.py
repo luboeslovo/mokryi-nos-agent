@@ -15,6 +15,11 @@ DAILY_SALES_PATH = os.path.join(
     "daily_sales.csv",
 )
 
+HISTORICAL_SALES_PATH = os.path.join(
+    PROJECT_DIR,
+    "historical_sales_monthly.csv",
+)
+
 
 SUM_METRICS = [
     "total_revenue",
@@ -49,6 +54,10 @@ def to_float(value):
     text = (
         text
         .replace(
+            "\xa0",
+            "",
+        )
+        .replace(
             " ",
             "",
         )
@@ -79,6 +88,19 @@ def to_int(value):
 
     except Exception:
         return 0
+
+
+def to_bool(value):
+    text = str(
+        value or ""
+    ).strip().lower()
+
+    return text in {
+        "1",
+        "true",
+        "yes",
+        "да",
+    }
 
 
 def round_money(value):
@@ -183,6 +205,71 @@ def load_daily_sales():
     rows.sort(
         key=lambda item:
             item["_date"]
+    )
+
+    return rows
+
+
+def load_historical_sales():
+    if not os.path.exists(
+        HISTORICAL_SALES_PATH
+    ):
+        return []
+
+    rows = []
+
+    with open(
+        HISTORICAL_SALES_PATH,
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as file:
+        reader = csv.DictReader(
+            file
+        )
+
+        for raw in reader:
+            try:
+                year = int(
+                    raw.get(
+                        "year",
+                        0,
+                    )
+                )
+
+                month = int(
+                    raw.get(
+                        "month",
+                        0,
+                    )
+                )
+
+            except Exception:
+                continue
+
+            if (
+                year <= 0
+                or month < 1
+                or month > 12
+            ):
+                continue
+
+            row = dict(
+                raw
+            )
+
+            row["_year"] = year
+            row["_month"] = month
+
+            rows.append(
+                row
+            )
+
+    rows.sort(
+        key=lambda item: (
+            item["_year"],
+            item["_month"],
+        )
     )
 
     return rows
@@ -369,6 +456,296 @@ def normalize_day(row):
                     )
                 )
             ),
+    }
+
+
+def normalize_historical_month(
+    row,
+):
+    year = int(
+        row["_year"]
+    )
+
+    month = int(
+        row["_month"]
+    )
+
+    is_complete = to_bool(
+        row.get(
+            "is_complete"
+        )
+    )
+
+    if not is_complete:
+        return None
+
+    days_in_month = (
+        calendar.monthrange(
+            year,
+            month,
+        )[1]
+    )
+
+    total_revenue = round_money(
+        to_float(
+            row.get(
+                "total_revenue"
+            )
+        )
+    )
+
+    check_revenue_net = round_money(
+        to_float(
+            row.get(
+                "check_revenue_net"
+            )
+        )
+    )
+
+    checks = to_int(
+        row.get(
+            "checks"
+        )
+    )
+
+    average_check = round_money(
+        to_float(
+            row.get(
+                "average_check"
+            )
+        )
+    )
+
+    ktch = round(
+        to_float(
+            row.get(
+                "ktch"
+            )
+        ),
+        2,
+    )
+
+    external_total = round_money(
+        to_float(
+            row.get(
+                "external_total"
+            )
+        )
+    )
+
+    external_orders = to_int(
+        row.get(
+            "external_orders"
+        )
+    )
+
+    summary = {
+        "status":
+            "ok",
+
+        "source":
+            "historical_monthly",
+
+        "source_name":
+            row.get(
+                "source",
+                "ПО ЧИСЛАМ",
+            ),
+
+        "data_granularity":
+            "monthly",
+
+        "year":
+            year,
+
+        "month":
+            month,
+
+        "start_date":
+            f"01.{month:02d}.{year:04d}",
+
+        "end_date":
+            (
+                f"{days_in_month:02d}."
+                f"{month:02d}."
+                f"{year:04d}"
+            ),
+
+        "days_in_month":
+            days_in_month,
+
+        "max_loaded_day":
+            days_in_month,
+
+        "is_complete":
+            True,
+
+        "total_revenue":
+            total_revenue,
+
+        "check_revenue_net":
+            check_revenue_net,
+
+        "checks":
+            checks,
+
+        "average_check":
+            average_check,
+
+        "ktch":
+            ktch,
+
+        "cash":
+            round_money(
+                to_float(
+                    row.get(
+                        "cash"
+                    )
+                )
+            ),
+
+        "card":
+            round_money(
+                to_float(
+                    row.get(
+                        "card"
+                    )
+                )
+            ),
+
+        "returns":
+            round_money(
+                to_float(
+                    row.get(
+                        "returns"
+                    )
+                )
+            ),
+
+        "self_pickup":
+            round_money(
+                to_float(
+                    row.get(
+                        "self_pickup"
+                    )
+                )
+            ),
+
+        "yandex_food":
+            round_money(
+                to_float(
+                    row.get(
+                        "yandex_food"
+                    )
+                )
+            ),
+
+        "kuper":
+            round_money(
+                to_float(
+                    row.get(
+                        "kuper"
+                    )
+                )
+            ),
+
+        "external_total":
+            external_total,
+
+        "external_orders":
+            external_orders,
+
+        "no_receipt":
+            round_money(
+                to_float(
+                    row.get(
+                        "no_receipt"
+                    )
+                )
+            ),
+
+        "revenue_per_data_day":
+            round_money(
+                total_revenue
+                / days_in_month
+            ),
+
+        "checks_per_data_day":
+            round(
+                checks
+                / days_in_month,
+                2,
+            ),
+
+        "external_revenue_per_data_day":
+            round_money(
+                external_total
+                / days_in_month
+            ),
+
+        "historical_note":
+            (
+                "Месячный итог взят из "
+                "исторического листа «ПО ЧИСЛАМ». "
+                "Для этого периода нет детальной "
+                "дневной аналитики в daily_sales.csv."
+            ),
+    }
+
+    return summary
+
+
+def get_historical_month_summary(
+    year,
+    month,
+):
+    year = int(
+        year
+    )
+
+    month = int(
+        month
+    )
+
+    rows = load_historical_sales()
+
+    for row in rows:
+        if (
+            row["_year"] == year
+            and row["_month"] == month
+        ):
+            summary = (
+                normalize_historical_month(
+                    row
+                )
+            )
+
+            if summary is None:
+                return {
+                    "status":
+                        "not_found",
+
+                    "year":
+                        year,
+
+                    "month":
+                        month,
+
+                    "reason":
+                        "historical_month_not_complete",
+                }
+
+            return summary
+
+    return {
+        "status":
+            "not_found",
+
+        "year":
+            year,
+
+        "month":
+            month,
     }
 
 
@@ -812,6 +1189,12 @@ def summarize_rows(
         "status":
             "ok",
 
+        "source":
+            "daily_sales",
+
+        "data_granularity":
+            "daily",
+
         "start_date":
             start_date.strftime(
                 "%d.%m.%Y"
@@ -1054,23 +1437,38 @@ def get_month_summary(
         month,
     )
 
-    if not rows:
-        return {
-            "status":
-                "not_found",
+    if rows:
+        return summarize_rows(
+            rows,
+            year=year,
+            month=month,
+        )
 
-            "year":
-                year,
-
-            "month":
-                month,
-        }
-
-    return summarize_rows(
-        rows,
-        year=year,
-        month=month,
+    historical = (
+        get_historical_month_summary(
+            year,
+            month,
+        )
     )
+
+    if (
+        historical.get(
+            "status"
+        )
+        == "ok"
+    ):
+        return historical
+
+    return {
+        "status":
+            "not_found",
+
+        "year":
+            year,
+
+        "month":
+            month,
+    }
 
 
 def get_month_period_summary(
@@ -1107,6 +1505,13 @@ def get_month_period_summary(
     )
 
     if not rows:
+        historical = (
+            get_historical_month_summary(
+                year,
+                month,
+            )
+        )
+
         return {
             "status":
                 "not_found",
@@ -1119,6 +1524,22 @@ def get_month_period_summary(
 
             "end_day":
                 end_day,
+
+            "reason":
+                (
+                    "partial_period_requires_daily_data"
+                    if historical.get(
+                        "status"
+                    )
+                    == "ok"
+                    else "no_data"
+                ),
+
+            "full_month_available":
+                historical.get(
+                    "status"
+                )
+                == "ok",
         }
 
     summary = summarize_rows(
@@ -1234,10 +1655,11 @@ def compare_sales_months(
             "period_b":
                 summary_b,
 
-            "message": (
-                "Для сравнения нужны данные "
-                "по обоим месяцам."
-            ),
+            "message":
+                (
+                    "Для сравнения нужны данные "
+                    "по обоим месяцам."
+                ),
         }
 
     index_a = (
@@ -1348,12 +1770,35 @@ def compare_sales_months(
 
                 "later_comparison_summary":
                     later_compare,
+
+                "message":
+                    (
+                        "Более поздний месяц ещё "
+                        "не завершён, а для старого "
+                        "месяца есть только полный "
+                        "месячный итог без дневной "
+                        "разбивки. Корректное "
+                        "like-for-like сравнение "
+                        "сделать нельзя."
+                    ),
             }
 
     metrics = build_comparison_metrics(
         earlier_compare,
         later_compare,
     )
+
+    sources = {
+        "earlier":
+            earlier_compare.get(
+                "source"
+            ),
+
+        "later":
+            later_compare.get(
+                "source"
+            ),
+    }
 
     return {
         "status":
@@ -1399,24 +1844,217 @@ def compare_sales_months(
         "metrics":
             metrics,
 
-        "analysis_note": (
+        "sources":
+            sources,
+
+        "analysis_note":
             (
-                "Более поздний месяц ещё не завершён. "
-                f"Основное сравнение сделано "
-                f"за одинаковый период: "
-                f"1–{comparison_end_day} число "
-                f"обоих месяцев. "
-                "Полные текущие месячные суммы "
-                "переданы отдельно только справочно."
-            )
-            if comparison_type
-            == "like_for_like_partial_month"
-            else (
-                "Оба месяца завершены. "
-                "Сравниваются полные месячные итоги."
-            )
-        ),
+                (
+                    "Более поздний месяц ещё не завершён. "
+                    f"Основное сравнение сделано "
+                    f"за одинаковый период: "
+                    f"1–{comparison_end_day} число "
+                    f"обоих месяцев. "
+                    "Полные текущие месячные суммы "
+                    "переданы отдельно только справочно."
+                )
+                if comparison_type
+                == "like_for_like_partial_month"
+                else (
+                    "Оба месяца завершены. "
+                    "Сравниваются полные месячные итоги."
+                )
+            ),
     }
+
+
+def print_month_test(
+    year,
+    month,
+):
+    result = get_month_summary(
+        year,
+        month,
+    )
+
+    print()
+    print(
+        f"{month:02d}.{year}"
+    )
+
+    print(
+        "status:",
+        result.get(
+            "status"
+        )
+    )
+
+    if (
+        result.get(
+            "status"
+        )
+        == "ok"
+    ):
+        print(
+            "source:",
+            result.get(
+                "source"
+            )
+        )
+
+        print(
+            "total_revenue:",
+            result.get(
+                "total_revenue"
+            )
+        )
+
+        print(
+            "check_revenue_net:",
+            result.get(
+                "check_revenue_net"
+            )
+        )
+
+        print(
+            "checks:",
+            result.get(
+                "checks"
+            )
+        )
+
+        print(
+            "average_check:",
+            result.get(
+                "average_check"
+            )
+        )
+
+        print(
+            "ktch:",
+            result.get(
+                "ktch"
+            )
+        )
+
+        print(
+            "external_total:",
+            result.get(
+                "external_total"
+            )
+        )
+
+
+def print_comparison_test(
+    title,
+    year_a,
+    month_a,
+    year_b,
+    month_b,
+):
+    print()
+    print("-" * 70)
+
+    print(
+        title
+    )
+
+    result = compare_sales_months(
+        year_a,
+        month_a,
+        year_b,
+        month_b,
+    )
+
+    print(
+        "status:",
+        result.get(
+            "status"
+        )
+    )
+
+    print(
+        "comparison_type:",
+        result.get(
+            "comparison_type"
+        )
+    )
+
+    if (
+        result.get(
+            "status"
+        )
+        == "ok"
+    ):
+        total = (
+            result.get(
+                "metrics",
+                {},
+            ).get(
+                "total_revenue"
+            )
+        )
+
+        checks = (
+            result.get(
+                "metrics",
+                {},
+            ).get(
+                "checks"
+            )
+        )
+
+        average_check = (
+            result.get(
+                "metrics",
+                {},
+            ).get(
+                "average_check"
+            )
+        )
+
+        ktch = (
+            result.get(
+                "metrics",
+                {},
+            ).get(
+                "ktch"
+            )
+        )
+
+        print(
+            "sources:",
+            result.get(
+                "sources"
+            )
+        )
+
+        print(
+            "total_revenue:",
+            total
+        )
+
+        print(
+            "checks:",
+            checks
+        )
+
+        print(
+            "average_check:",
+            average_check
+        )
+
+        print(
+            "ktch:",
+            ktch
+        )
+
+    else:
+        print(
+            result.get(
+                "message"
+            )
+        )
 
 
 def demo():
@@ -1429,49 +2067,93 @@ def demo():
 
     print()
     print(
-        "Последний закрытый день:"
+        "ИСТОРИЧЕСКИЕ МЕСЯЦЫ:"
     )
 
-    print(
-        get_latest_sales_day()
+    print_month_test(
+        2025,
+        4,
+    )
+
+    print_month_test(
+        2025,
+        5,
+    )
+
+    print_month_test(
+        2026,
+        4,
+    )
+
+    print_month_test(
+        2026,
+        5,
+    )
+
+    print_month_test(
+        2026,
+        6,
+    )
+
+    print_month_test(
+        2026,
+        7,
+    )
+
+    print_month_test(
+        2026,
+        8,
     )
 
     print()
+    print("=" * 70)
     print(
-        "Сравнение последних двух дней:"
+        "СРАВНЕНИЯ"
+    )
+    print("=" * 70)
+
+    print_comparison_test(
+        (
+            "Апрель 2025 "
+            "против мая 2025"
+        ),
+        2025,
+        4,
+        2025,
+        5,
     )
 
-    recent = get_recent_sales(
-        2
+    print_comparison_test(
+        (
+            "Апрель 2026 "
+            "против мая 2026"
+        ),
+        2026,
+        4,
+        2026,
+        5,
     )
 
-    days = recent.get(
-        "days",
-        [],
+    print_comparison_test(
+        (
+            "Июнь 2026 "
+            "против июля 2026"
+        ),
+        2026,
+        6,
+        2026,
+        7,
     )
 
-    if len(
-        days
-    ) >= 2:
-        print(
-            compare_sales_days(
-                days[-2]["date"],
-                days[-1]["date"],
-            )
-        )
-
-    print()
-    print(
-        "Август против июля — LIKE-FOR-LIKE:"
-    )
-
-    print(
-        compare_sales_months(
-            2026,
-            7,
-            2026,
-            8,
-        )
+    print_comparison_test(
+        (
+            "Июль 2026 "
+            "против августа 2026"
+        ),
+        2026,
+        7,
+        2026,
+        8,
     )
 
 
