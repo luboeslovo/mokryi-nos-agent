@@ -164,13 +164,18 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_sales_data_coverage",
         description=(
-            "Возвращает точные границы доступности данных "
+            "Возвращает только точные границы доступности данных "
             "о продажах и их детализацию. "
             "ОБЯЗАТЕЛЬНО используй, если пользователь спрашивает "
             "'за какие даты есть данные', "
             "'с какого числа есть статистика', "
             "'можешь ли сравнить такую дату', "
             "'какие периоды доступны' или похожий вопрос. "
+            "Не используй этот инструмент для расчёта выручки, "
+            "чеков, среднего чека или других показателей "
+            "за весь период. Для показателей 'за весь период', "
+            "'за всё время' или 'с открытия' используй "
+            "get_sales_overall_summary. "
             "Не утверждай самостоятельно, что дневные данные "
             "доступны с открытия магазина. "
             "Исторические данные до начала точной дневной "
@@ -375,10 +380,17 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_sales_period_summary",
         description=(
-            "Возвращает показатели продаж за произвольный "
+            "Возвращает показатели продаж за конкретный "
             "диапазон дат. "
             "Используй для выручки, чеков, среднего чека, "
-            "КТЧ, внешних заказов и других показателей продаж. "
+            "КТЧ, внешних заказов и других показателей продаж, "
+            "когда пользователь явно задаёт начало и конец "
+            "периода. "
+            "Если пользователь назвал обе границы, обязательно "
+            "передай обе даты без изменения. "
+            "Не используй этот инструмент для запросов "
+            "'за весь период', 'за всё время' или 'с открытия': "
+            "для них используй get_sales_overall_summary. "
             "Для финансовых показателей ОПиУ используй "
             "get_finance_period_summary или get_finance_metric."
         ),
@@ -402,6 +414,28 @@ FUNCTION_SPECS = [
                 "start_date",
                 "end_date",
             ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_sales_overall_summary",
+        description=(
+            "Возвращает показатели продаж за весь доступный "
+            "период работы: от начала доступной управленческой "
+            "истории до последнего закрытого дня. "
+            "ОБЯЗАТЕЛЬНО используй для запросов вроде "
+            "'за весь период', 'за всё время', "
+            "'за всё время работы', 'с открытия', "
+            "'какой средний чек за весь период', "
+            "'сколько всего было выручки за всё время'. "
+            "У инструмента нет дат: Python сам определяет "
+            "корректные границы. "
+            "Не используй get_sales_data_coverage для расчёта "
+            "таких показателей."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
         },
     ),
 
@@ -1081,6 +1115,133 @@ def build_latest_day_report():
     return result
 
 
+def build_sales_period_summary(
+    start_date=None,
+    end_date=None,
+):
+    def clean_optional_date(
+        value,
+    ):
+        if value is None:
+            return None
+
+        value = str(
+            value
+        ).strip()
+
+        if not value:
+            return None
+
+        return value
+
+    start_date = clean_optional_date(
+        start_date
+    )
+
+    end_date = clean_optional_date(
+        end_date
+    )
+
+    if (
+        start_date is None
+        or end_date is None
+    ):
+        coverage = (
+            get_available_sales_coverage()
+        )
+
+        if (
+            coverage.get(
+                "status"
+            )
+            != "ok"
+        ):
+            return {
+                "status":
+                    "coverage_error",
+
+                "message":
+                    (
+                        "Не удалось определить "
+                        "границы доступного "
+                        "периода продаж."
+                    ),
+
+                "coverage":
+                    coverage,
+            }
+
+        historical = coverage.get(
+            "historical",
+            {},
+        )
+
+        daily_full = (
+            coverage.get(
+                "daily_full_management"
+            )
+            or coverage.get(
+                "daily"
+            )
+            or {}
+        )
+
+        daily_checks = coverage.get(
+            "daily_checks",
+            {},
+        )
+
+        if start_date is None:
+            start_date = (
+                historical.get(
+                    "start_date"
+                )
+                or daily_checks.get(
+                    "start_date"
+                )
+                or daily_full.get(
+                    "start_date"
+                )
+            )
+
+        if end_date is None:
+            end_date = (
+                daily_full.get(
+                    "end_date"
+                )
+                or coverage.get(
+                    "daily",
+                    {},
+                ).get(
+                    "end_date"
+                )
+                or daily_checks.get(
+                    "end_date"
+                )
+            )
+
+    if (
+        start_date is None
+        or end_date is None
+    ):
+        return {
+            "status":
+                "coverage_error",
+
+            "message":
+                (
+                    "Не удалось определить "
+                    "полные границы периода "
+                    "для расчёта продаж."
+                ),
+        }
+
+    return get_period_summary(
+        start_date,
+        end_date,
+    )
+
+
 def run_tool(
     name,
     arguments,
@@ -1182,6 +1343,9 @@ def run_tool(
                 "end_date"
             ],
         )
+
+    if name == "get_sales_overall_summary":
+        return build_sales_period_summary()
 
     if name == "compare_sales_periods":
         return compare_sales_periods(
