@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 import time
 from datetime import datetime
@@ -1991,6 +1991,617 @@ def get_finance_metric(
         "available_derived_metrics":
             sorted(
                 metrics.keys()
+            ),
+    }
+
+
+
+def rank_finance_months(
+    metric,
+    start_month=None,
+    end_month=None,
+    order="desc",
+    limit=5,
+    include_partial=False,
+):
+    normalized_label = (
+        normalize_metric_name(
+            metric
+        )
+    )
+
+    if normalized_label in {
+        "рентабельность",
+        "средняя рентабельность",
+    }:
+        return {
+            "status":
+                "needs_clarification",
+
+            "metric":
+                metric,
+
+            "message":
+                (
+                    "Рентабельность бывает разной. "
+                    "Нужно уточнить показатель."
+                ),
+
+            "available_metrics": {
+                "gross_margin_pct":
+                    "валовая маржинальность",
+
+                "sales_margin_pct":
+                    "рентабельность продаж",
+
+                "ebitda_margin_pct":
+                    "EBITDA-рентабельность",
+
+                "pretax_margin_pct":
+                    "рентабельность до налогов",
+
+                "net_margin_pct":
+                    "чистая рентабельность",
+            },
+        }
+
+    normalized_metric = (
+        METRIC_ALIASES.get(
+            normalized_label,
+            normalized_label,
+        )
+    )
+
+    order = (
+        str(
+            order or "desc"
+        )
+        .strip()
+        .lower()
+    )
+
+    if order not in {
+        "asc",
+        "desc",
+    }:
+        return {
+            "status":
+                "invalid_order",
+
+            "order":
+                order,
+
+            "supported":
+                [
+                    "asc",
+                    "desc",
+                ],
+        }
+
+    def normalize_bound(value):
+        if value is None:
+            return None
+
+        text = (
+            str(value)
+            .strip()
+        )
+
+        parts = text.split(
+            "-"
+        )
+
+        if len(parts) != 2:
+            return None
+
+        try:
+            year = int(
+                parts[0]
+            )
+
+            month = int(
+                parts[1]
+            )
+
+        except Exception:
+            return None
+
+        if (
+            year < 2000
+            or year > 2100
+            or month < 1
+            or month > 12
+        ):
+            return None
+
+        return (
+            f"{year:04d}-"
+            f"{month:02d}"
+        )
+
+    if start_month is not None:
+        start_month = (
+            str(start_month)
+            .strip()
+        )
+
+        if not start_month:
+            start_month = None
+
+    if end_month is not None:
+        end_month = (
+            str(end_month)
+            .strip()
+        )
+
+        if not end_month:
+            end_month = None
+
+    normalized_start = (
+        normalize_bound(
+            start_month
+        )
+        if start_month is not None
+        else None
+    )
+
+    normalized_end = (
+        normalize_bound(
+            end_month
+        )
+        if end_month is not None
+        else None
+    )
+
+    if (
+        start_month is not None
+        and normalized_start is None
+    ):
+        return {
+            "status":
+                "invalid_month",
+
+            "field":
+                "start_month",
+
+            "value":
+                start_month,
+
+            "expected_format":
+                "YYYY-MM",
+        }
+
+    if (
+        end_month is not None
+        and normalized_end is None
+    ):
+        return {
+            "status":
+                "invalid_month",
+
+            "field":
+                "end_month",
+
+            "value":
+                end_month,
+
+            "expected_format":
+                "YYYY-MM",
+        }
+
+    if (
+        normalized_start is not None
+        and normalized_end is not None
+        and normalized_start
+        > normalized_end
+    ):
+        return {
+            "status":
+                "invalid_period",
+
+            "start_month":
+                normalized_start,
+
+            "end_month":
+                normalized_end,
+
+            "message":
+                (
+                    "Начальный месяц позже "
+                    "конечного."
+                ),
+        }
+
+    months = (
+        load_financial_months()
+    )
+
+    if not months:
+        return {
+            "status":
+                "no_data",
+        }
+
+    candidates = []
+
+    excluded_partial_months = []
+
+    available_metrics = set()
+
+    for row in months:
+        month_key = (
+            row.get(
+                "month_key"
+            )
+        )
+
+        if not month_key:
+            continue
+
+        if (
+            normalized_start is not None
+            and month_key
+            < normalized_start
+        ):
+            continue
+
+        if (
+            normalized_end is not None
+            and month_key
+            > normalized_end
+        ):
+            continue
+
+        is_partial = bool(
+            row.get(
+                "is_partial"
+            )
+        )
+
+        if (
+            is_partial
+            and not include_partial
+        ):
+            excluded_partial_months.append(
+                month_key
+            )
+
+            continue
+
+        period = (
+            get_finance_period(
+                start_month=month_key,
+                end_month=month_key,
+                include_partial=True,
+            )
+        )
+
+        if (
+            period.get(
+                "status"
+            )
+            != "ok"
+        ):
+            continue
+
+        metrics = (
+            period.get(
+                "metrics",
+                {}
+            )
+        )
+
+        for name, value in (
+            metrics.items()
+        ):
+            if value is None:
+                continue
+
+            try:
+                float(value)
+
+            except Exception:
+                continue
+
+            available_metrics.add(
+                name
+            )
+
+        value = metrics.get(
+            normalized_metric
+        )
+
+        if value is None:
+            continue
+
+        try:
+            numeric_value = float(
+                value
+            )
+
+        except Exception:
+            continue
+
+        candidates.append(
+            {
+                "month":
+                    month_key,
+
+                "display":
+                    row.get(
+                        "display",
+                        month_key,
+                    ),
+
+                "year":
+                    row.get(
+                        "year"
+                    ),
+
+                "month_number":
+                    row.get(
+                        "month"
+                    ),
+
+                "is_partial":
+                    is_partial,
+
+                "metric":
+                    normalized_metric,
+
+                "value":
+                    value,
+
+                "numeric_value":
+                    numeric_value,
+
+                "revenue":
+                    metrics.get(
+                        "revenue"
+                    ),
+
+                "gross_profit":
+                    metrics.get(
+                        "gross_profit"
+                    ),
+
+                "gross_margin_pct":
+                    metrics.get(
+                        "gross_margin_pct"
+                    ),
+
+                "profit_from_sales":
+                    metrics.get(
+                        "profit_from_sales"
+                    ),
+
+                "sales_margin_pct":
+                    metrics.get(
+                        "sales_margin_pct"
+                    ),
+
+                "ebitda":
+                    metrics.get(
+                        "ebitda"
+                    ),
+
+                "ebitda_margin_pct":
+                    metrics.get(
+                        "ebitda_margin_pct"
+                    ),
+
+                "pretax_profit":
+                    metrics.get(
+                        "pretax_profit"
+                    ),
+
+                "pretax_margin_pct":
+                    metrics.get(
+                        "pretax_margin_pct"
+                    ),
+
+                "net_profit":
+                    metrics.get(
+                        "net_profit"
+                    ),
+
+                "net_margin_pct":
+                    metrics.get(
+                        "net_margin_pct"
+                    ),
+
+                "royalty":
+                    metrics.get(
+                        "royalty"
+                    ),
+
+                "royalty_share_pct":
+                    metrics.get(
+                        "royalty_share_pct"
+                    ),
+
+                "markup_factor":
+                    metrics.get(
+                        "markup_factor"
+                    ),
+
+                "markup_pct":
+                    metrics.get(
+                        "markup_pct"
+                    ),
+            }
+        )
+
+    if (
+        normalized_metric
+        not in available_metrics
+    ):
+        return {
+            "status":
+                "unsupported_metric",
+
+            "metric":
+                metric,
+
+            "normalized_metric":
+                normalized_metric,
+
+            "available_metrics":
+                sorted(
+                    available_metrics
+                ),
+        }
+
+    reverse = (
+        order == "desc"
+    )
+
+    candidates.sort(
+        key=lambda item:
+            item[
+                "numeric_value"
+            ],
+        reverse=reverse,
+    )
+
+    try:
+        limit = int(
+            limit
+        )
+
+    except Exception:
+        limit = 5
+
+    limit = max(
+        1,
+        min(
+            limit,
+            100,
+        ),
+    )
+
+    selected = (
+        candidates[
+            :limit
+        ]
+    )
+
+    ranking = []
+
+    for position, item in enumerate(
+        selected,
+        start=1,
+    ):
+        result_item = dict(
+            item
+        )
+
+        result_item.pop(
+            "numeric_value",
+            None,
+        )
+
+        result_item[
+            "position"
+        ] = position
+
+        ranking.append(
+            result_item
+        )
+
+    if (
+        normalized_metric
+        in PERCENT_METRICS
+    ):
+        metric_unit = "percent"
+
+    elif (
+        normalized_metric
+        == "markup_factor"
+    ):
+        metric_unit = "coefficient"
+
+    else:
+        metric_unit = "rubles"
+
+    warnings = []
+
+    if (
+        include_partial
+        and any(
+            item.get(
+                "is_partial"
+            )
+            for item in ranking
+        )
+    ):
+        warnings.append(
+            (
+                "В рейтинг включён незакрытый "
+                "месяц. Его расходы и итоговая "
+                "прибыль могут быть неполными."
+            )
+        )
+
+    return {
+        "status":
+            "ok",
+
+        "source":
+            "Google Sheets / ОПиУ",
+
+        "granularity":
+            "month",
+
+        "metric":
+            normalized_metric,
+
+        "requested_metric":
+            metric,
+
+        "metric_unit":
+            metric_unit,
+
+        "order":
+            order,
+
+        "limit":
+            limit,
+
+        "start_month":
+            normalized_start,
+
+        "end_month":
+            normalized_end,
+
+        "include_partial":
+            bool(
+                include_partial
+            ),
+
+        "candidates_count":
+            len(
+                candidates
+            ),
+
+        "excluded_partial_months":
+            excluded_partial_months,
+
+        "ranking":
+            ranking,
+
+        "warnings":
+            warnings,
+
+        "interpretation_note":
+            (
+                "Рейтинг построен по ОПиУ. "
+                "По умолчанию незакрытые месяцы "
+                "исключаются. Процентные показатели "
+                "для каждого месяца рассчитываются "
+                "его финансовым периодом, а не "
+                "средним арифметическим других "
+                "месяцев."
             ),
     }
 

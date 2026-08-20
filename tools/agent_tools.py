@@ -35,6 +35,7 @@ from finance_tools import (
     compare_finance_periods,
     get_finance_metric,
     get_finance_period,
+    rank_finance_months,
 )
 
 from rfm_tools import (
@@ -600,6 +601,112 @@ FUNCTION_SPECS = [
     # ========================================================
 
     ChatFunctionSpecification(
+        name="rank_finance_months",
+        description=(
+            "Строит рейтинг месяцев по финансовому показателю "
+            "из управленческого ОПиУ. "
+            "Используй для вопросов вроде "
+            "«какой месяц был самым маржинальным?», "
+            "«топ месяцев по чистой прибыли», "
+            "«худший месяц по EBITDA», "
+            "«в каком месяце была самая высокая рентабельность продаж?». "
+            "По умолчанию незакрытые месяцы исключаются. "
+            "Не используй rank_sales_periods для рейтингов "
+            "по прибыли, маржинальности, EBITDA, рентабельности, "
+            "роялти, себестоимости или другим показателям ОПиУ."
+        ),
+        parameters={
+            "type":
+                "object",
+
+            "properties": {
+                "metric": {
+                    "type":
+                        "string",
+
+                    "description":
+                        (
+                            "Финансовый показатель. "
+                            "Можно передавать естественное русское название "
+                            "или внутреннее имя, например: "
+                            "маржинальность, gross_margin_pct, "
+                            "чистая прибыль, net_profit, "
+                            "EBITDA, ebitda_margin_pct, "
+                            "рентабельность продаж, sales_margin_pct, "
+                            "чистая рентабельность, net_margin_pct, "
+                            "роялти, royalty_share_pct, "
+                            "торговая наценка."
+                        ),
+                },
+
+                "start_month": {
+                    "type":
+                        "string",
+
+                    "description":
+                        (
+                            "Необязательный первый месяц рейтинга "
+                            "в формате YYYY-MM."
+                        ),
+                },
+
+                "end_month": {
+                    "type":
+                        "string",
+
+                    "description":
+                        (
+                            "Необязательный последний месяц рейтинга "
+                            "в формате YYYY-MM."
+                        ),
+                },
+
+                "order": {
+                    "type":
+                        "string",
+
+                    "description":
+                        (
+                            "Порядок рейтинга: "
+                            "desc — от большего к меньшему, "
+                            "asc — от меньшего к большему. "
+                            "Для «самый высокий» используй desc, "
+                            "для «самый низкий» или «худший» — asc."
+                        ),
+                },
+
+                "limit": {
+                    "type":
+                        "integer",
+
+                    "description":
+                        (
+                            "Сколько месяцев вернуть. "
+                            "Для вопроса про один лучший месяц — 1."
+                        ),
+                },
+
+                "include_partial": {
+                    "type":
+                        "boolean",
+
+                    "description":
+                        (
+                            "Включать ли незакрытые месяцы. "
+                            "Обычно false. "
+                            "Ставь true только если пользователь "
+                            "явно просит учитывать текущий незакрытый месяц."
+                        ),
+                },
+            },
+
+            "required": [
+                "metric",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
         name="get_finance_metric",
         description=(
             "Возвращает один финансовый показатель "
@@ -1134,6 +1241,31 @@ def run_tool(
             min_checks=arguments.get(
                 "min_checks",
                 0,
+            ),
+            include_partial=arguments.get(
+                "include_partial",
+                False,
+            ),
+        )
+
+    if name == "rank_finance_months":
+        return rank_finance_months(
+            metric=arguments[
+                "metric"
+            ],
+            start_month=arguments.get(
+                "start_month"
+            ),
+            end_month=arguments.get(
+                "end_month"
+            ),
+            order=arguments.get(
+                "order",
+                "desc",
+            ),
+            limit=arguments.get(
+                "limit",
+                5,
             ),
             include_partial=arguments.get(
                 "include_partial",
