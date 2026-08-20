@@ -1,4 +1,4 @@
-import os
+﻿import os
 import subprocess
 import sys
 from datetime import datetime
@@ -50,6 +50,11 @@ STEPS = [
         "Собираю единую дневную таблицу продаж",
         "build_daily_sales.py"
     ),
+    (
+        "Собираю историческую дневную таблицу чеков",
+        "build_historical_daily_checks.py"
+    ),
+
     (
         "Обновляю ПО ЧИСЛАМ и ПО ДНЯМ НЕДЕЛИ",
         "export_daily_sales_to_sheets.py"

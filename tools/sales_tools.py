@@ -3,6 +3,8 @@ import csv
 import os
 from datetime import datetime
 
+from historical_daily_tools import get_historical_daily_sales
+
 
 PROJECT_DIR = os.path.dirname(
     os.path.dirname(
@@ -29,6 +31,54 @@ SUM_METRICS = [
     "cash",
     "card",
     "returns",
+    "self_pickup",
+    "yandex_food",
+    "kuper",
+    "external_total",
+    "yandex_orders",
+    "kuper_orders",
+    "external_orders",
+    "no_receipt",
+]
+
+
+MODERN_DAY_AVAILABLE_METRICS = [
+    "total_revenue",
+    "sales_revenue",
+    "returns",
+    "check_revenue_net",
+    "checks",
+    "return_checks",
+    "items",
+    "returned_items",
+    "ktch",
+    "average_check",
+    "cash",
+    "card",
+    "self_pickup",
+    "yandex_food",
+    "kuper",
+    "external_total",
+    "yandex_orders",
+    "kuper_orders",
+    "external_orders",
+    "no_receipt",
+]
+
+
+DAY_COMPARISON_METRICS = [
+    "total_revenue",
+    "sales_revenue",
+    "returns",
+    "check_revenue_net",
+    "checks",
+    "return_checks",
+    "items",
+    "returned_items",
+    "ktch",
+    "average_check",
+    "cash",
+    "card",
     "self_pickup",
     "yandex_food",
     "kuper",
@@ -282,9 +332,21 @@ def normalize_day(row):
         )
     )
 
+    return_checks = to_int(
+        row.get(
+            "return_checks"
+        )
+    )
+
     items = to_float(
         row.get(
             "items"
+        )
+    )
+
+    returned_items = to_float(
+        row.get(
+            "returned_items"
         )
     )
 
@@ -293,6 +355,33 @@ def normalize_day(row):
             "check_revenue_net"
         )
     )
+
+    returns = to_float(
+        row.get(
+            "returns",
+            row.get(
+                "total_return"
+            ),
+        )
+    )
+
+    sales_revenue = to_float(
+        row.get(
+            "sales_revenue",
+            row.get(
+                "check_revenue"
+            ),
+        )
+    )
+
+    if (
+        sales_revenue == 0
+        and check_revenue_net != 0
+    ):
+        sales_revenue = (
+            check_revenue_net
+            - returns
+        )
 
     average_check = to_float(
         row.get(
@@ -330,6 +419,29 @@ def normalize_day(row):
                 "%d.%m.%Y"
             ),
 
+        "source":
+            "daily_sales",
+
+        "source_name":
+            "daily_sales.csv",
+
+        "data_granularity":
+            "daily",
+
+        "data_scope":
+            "full_sales",
+
+        "full_revenue_available":
+            True,
+
+        "available_metrics":
+            list(
+                MODERN_DAY_AVAILABLE_METRICS
+            ),
+
+        "unavailable_metrics":
+            [],
+
         "total_revenue":
             round_money(
                 to_float(
@@ -337,6 +449,16 @@ def normalize_day(row):
                         "total_revenue"
                     )
                 )
+            ),
+
+        "sales_revenue":
+            round_money(
+                sales_revenue
+            ),
+
+        "returns":
+            round_money(
+                returns
             ),
 
         "check_revenue_net":
@@ -347,9 +469,18 @@ def normalize_day(row):
         "checks":
             checks,
 
+        "return_checks":
+            return_checks,
+
         "items":
             round(
                 items,
+                2,
+            ),
+
+        "returned_items":
+            round(
+                returned_items,
                 2,
             ),
 
@@ -378,15 +509,6 @@ def normalize_day(row):
                 to_float(
                     row.get(
                         "card"
-                    )
-                )
-            ),
-
-        "returns":
-            round_money(
-                to_float(
-                    row.get(
-                        "returns"
                     )
                 )
             ),
@@ -455,6 +577,14 @@ def normalize_day(row):
                         "no_receipt"
                     )
                 )
+            ),
+
+        "data_note":
+            (
+                "Для этой даты доступна полная "
+                "дневная управленческая выручка "
+                "из daily_sales.csv вместе с "
+                "подключёнными каналами продаж."
             ),
     }
 
@@ -772,12 +902,6 @@ def get_latest_sales_day():
 def get_daily_sales(date=None):
     rows = load_daily_sales()
 
-    if not rows:
-        return {
-            "status":
-                "no_data",
-        }
-
     if (
         date is None
         or str(
@@ -789,6 +913,12 @@ def get_daily_sales(date=None):
             "последний",
         }
     ):
+        if not rows:
+            return {
+                "status":
+                    "no_data",
+            }
+
         return {
             "status":
                 "ok",
@@ -818,6 +948,22 @@ def get_daily_sales(date=None):
                     ),
             }
 
+    historical = (
+        get_historical_daily_sales(
+            target.strftime(
+                "%d.%m.%Y"
+            )
+        )
+    )
+
+    if (
+        historical.get(
+            "status"
+        )
+        == "ok"
+    ):
+        return historical
+
     return {
         "status":
             "not_found",
@@ -826,6 +972,9 @@ def get_daily_sales(date=None):
             target.strftime(
                 "%d.%m.%Y"
             ),
+
+        "historical_result":
+            historical,
     }
 
 
@@ -973,34 +1122,65 @@ def compare_sales_days(
         earlier = day_b
         later = day_a
 
-    metrics = {}
+    earlier_available = set(
+        earlier.get(
+            "available_metrics",
+            [],
+        )
+    )
 
-    metric_names = [
-        "total_revenue",
-        "check_revenue_net",
-        "checks",
-        "items",
-        "ktch",
-        "average_check",
-        "external_total",
-        "external_orders",
-        "yandex_food",
-        "yandex_orders",
+    later_available = set(
+        later.get(
+            "available_metrics",
+            [],
+        )
+    )
+
+    common_metrics = [
+        metric
+        for metric in DAY_COMPARISON_METRICS
+        if (
+            metric in earlier_available
+            and metric in later_available
+        )
     ]
 
-    for metric in metric_names:
+    metrics = {}
+
+    for metric in common_metrics:
         metrics[
             metric
         ] = metric_comparison(
             earlier.get(
-                metric,
-                0,
+                metric
             ),
             later.get(
-                metric,
-                0,
+                metric
             ),
         )
+
+    excluded_metrics = [
+        metric
+        for metric in DAY_COMPARISON_METRICS
+        if metric not in common_metrics
+    ]
+
+    full_revenue_comparable = (
+        "total_revenue"
+        in common_metrics
+    )
+
+    if not common_metrics:
+        return {
+            "status":
+                "no_common_metrics",
+
+            "earlier_day":
+                earlier,
+
+            "later_day":
+                later,
+        }
 
     return {
         "status":
@@ -1009,14 +1189,75 @@ def compare_sales_days(
         "comparison_direction":
             "later_vs_earlier",
 
+        "comparison_scope":
+            (
+                "full_sales"
+                if full_revenue_comparable
+                else "common_available_metrics"
+            ),
+
+        "full_revenue_comparable":
+            full_revenue_comparable,
+
         "earlier_date":
             earlier["date"],
 
         "later_date":
             later["date"],
 
+        "earlier_source":
+            earlier.get(
+                "source"
+            ),
+
+        "later_source":
+            later.get(
+                "source"
+            ),
+
+        "earlier_data_scope":
+            earlier.get(
+                "data_scope"
+            ),
+
+        "later_data_scope":
+            later.get(
+                "data_scope"
+            ),
+
+        "common_metrics":
+            common_metrics,
+
+        "excluded_metrics":
+            excluded_metrics,
+
         "metrics":
             metrics,
+
+        "earlier_day":
+            earlier,
+
+        "later_day":
+            later,
+
+        "comparison_note":
+            (
+                "Полная дневная выручка доступна "
+                "для обеих дат, поэтому сравнение "
+                "может включать total_revenue и "
+                "каналы продаж."
+                if full_revenue_comparable
+                else (
+                    "Для одной или обеих дат нет "
+                    "подтверждённой полной дневной "
+                    "выручки. Сравниваются только "
+                    "показатели, которые точно "
+                    "доступны для обеих дат. "
+                    "Чековую выручку нельзя "
+                    "называть полной выручкой "
+                    "магазина."
+                )
+            ),
     }
 
 

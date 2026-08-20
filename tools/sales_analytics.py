@@ -1,7 +1,11 @@
-import calendar
+﻿import calendar
 import csv
 import os
 from datetime import date, datetime, timedelta
+
+from historical_daily_tools import (
+    get_historical_daily_coverage,
+)
 
 from sales_tools import (
     get_month_summary,
@@ -623,13 +627,66 @@ def get_earliest_history_date():
 
 
 def get_available_sales_coverage():
-    earliest_day = (
+    earliest_full_day = (
         get_earliest_daily_date()
     )
 
-    latest_day = (
+    latest_full_day = (
         get_latest_daily_date()
     )
+
+    historical_daily = (
+        get_historical_daily_coverage()
+    )
+
+    historical_daily_ok = (
+        historical_daily.get(
+            "status"
+        )
+        == "ok"
+    )
+
+    earliest_check_day = None
+    latest_check_day = None
+
+    if historical_daily_ok:
+        earliest_check_day = parse_day(
+            historical_daily[
+                "start_date"
+            ]
+        )
+
+        latest_check_day = parse_day(
+            historical_daily[
+                "end_date"
+            ]
+        )
+
+    # daily_sales.csv тоже содержит точные
+    # чековые показатели. Поэтому если
+    # historical_daily_checks.csv ещё не успел
+    # обновиться до последнего закрытого дня,
+    # непрерывное чековое покрытие всё равно
+    # можно продлить через daily_sales.csv.
+    if earliest_full_day is not None:
+        if (
+            earliest_check_day is None
+            or earliest_full_day
+            < earliest_check_day
+        ):
+            earliest_check_day = (
+                earliest_full_day
+            )
+
+    if latest_full_day is not None:
+        if (
+            latest_check_day is None
+            or latest_full_day
+            > latest_check_day
+        ):
+            latest_check_day = (
+                latest_full_day
+            )
 
     earliest_history = (
         get_earliest_history_date()
@@ -663,42 +720,124 @@ def get_available_sales_coverage():
             }
         )
 
+    full_daily_available = bool(
+        earliest_full_day
+        and latest_full_day
+    )
+
+    full_daily = {
+        "available":
+            full_daily_available,
+
+        "start_date":
+            (
+                format_day(
+                    earliest_full_day
+                )
+                if earliest_full_day
+                else None
+            ),
+
+        "end_date":
+            (
+                format_day(
+                    latest_full_day
+                )
+                if latest_full_day
+                else None
+            ),
+
+        "data_scope":
+            "full_sales",
+
+        "full_revenue_available":
+            full_daily_available,
+
+        "note":
+            (
+                "Полная дневная управленческая "
+                "аналитика: чековая выручка, "
+                "подключённые внешние каналы "
+                "и продажи без чека. "
+                "Дневные рейтинги по полной "
+                "выручке строятся внутри "
+                "этого диапазона."
+            ),
+    }
+
     return {
         "status":
             "ok",
 
-        "daily": {
+        # Старый ключ оставляем для обратной
+        # совместимости. Он по-прежнему означает
+        # полную дневную управленческую аналитику.
+        "daily":
+            dict(
+                full_daily
+            ),
+
+        "daily_checks": {
             "available":
                 bool(
-                    earliest_day
-                    and latest_day
+                    earliest_check_day
+                    and latest_check_day
                 ),
 
             "start_date":
                 (
                     format_day(
-                        earliest_day
+                        earliest_check_day
                     )
-                    if earliest_day
+                    if earliest_check_day
                     else None
                 ),
 
             "end_date":
                 (
                     format_day(
-                        latest_day
+                        latest_check_day
                     )
-                    if latest_day
+                    if latest_check_day
                     else None
                 ),
 
+            "data_scope":
+                "checks_and_items",
+
+            "full_revenue_available":
+                False,
+
+            "available_metrics": [
+                "sales_revenue",
+                "returns",
+                "check_revenue_net",
+                "checks",
+                "return_checks",
+                "items",
+                "returned_items",
+                "average_check",
+                "ktch",
+            ],
+
             "note":
                 (
-                    "Точные дневные сравнения "
-                    "и рейтинги возможны только "
-                    "внутри этого диапазона."
+                    "Точные дневные чековые "
+                    "показатели и товары. "
+                    "Для старой части диапазона "
+                    "нет подтверждённой полной "
+                    "дневной выручки с Яндексом, "
+                    "Купером и продажами без чека. "
+                    "Поэтому старые дни можно "
+                    "сравнивать с новыми только "
+                    "по общим доступным метрикам."
                 ),
         },
+
+        "daily_full_management":
+            dict(
+                full_daily
+            ),
 
         "historical": {
             "available":
@@ -720,24 +859,57 @@ def get_available_sales_coverage():
 
             "note":
                 (
-                    "Старые данные могут быть "
-                    "месячными или объединёнными. "
+                    "Управленческие исторические "
+                    "данные доступны по полным "
+                    "месяцам и отдельным "
+                    "объединённым периодам. "
                     "Объединённый период нельзя "
-                    "искусственно делить на месяцы."
+                    "искусственно делить на "
+                    "месяцы или дни."
                 ),
         },
 
-        "profit_available":
-            False,
+        "interpretation": {
+            "exact_daily_checks":
+                (
+                    "Точные отдельные дни по "
+                    "чекам и товарам доступны "
+                    "в диапазоне daily_checks."
+                ),
 
-        "profit_note":
-            (
-                "Сейчас подключена выручка, "
-                "но не полноценная себестоимость "
-                "и расходы. Поэтому максимум "
-                "выручки нельзя называть "
-                "максимумом прибыли."
-            ),
+            "full_daily_revenue":
+                (
+                    "Полную дневную выручку "
+                    "магазина можно заявлять "
+                    "только внутри диапазона "
+                    "daily_full_management."
+                ),
+
+            "cross_layer_comparisons":
+                (
+                    "Если одна дата относится "
+                    "только к чековому слою, "
+                    "сравниваются лишь общие "
+                    "доступные показатели; "
+                    "check_revenue_net нельзя "
+                    "называть полной выручкой."
+                ),
+
+            "historical_monthly":
+                (
+                    "Для старых полных месяцев "
+                    "каноничны исторические "
+                    "управленческие итоги."
+                ),
+
+            "combined_periods":
+                (
+                    "Объединённые исторические "
+                    "периоды нельзя искусственно "
+                    "разбивать на отдельные "
+                    "месяцы или дни."
+                ),
+        },
     }
 
 

@@ -1,4 +1,4 @@
-from gigachat.models import (
+﻿from gigachat.models import (
     ChatFunctionSpecification,
     ChatTool,
 )
@@ -18,12 +18,23 @@ from sales_tools import (
     get_recent_sales,
 )
 
+from live_sales_tools import (
+    get_current_sales,
+)
+
 from sales_analytics import (
     compare_sales_periods,
     compare_sales_years,
+    get_available_sales_coverage,
     get_period_summary,
     get_year_summary,
     rank_sales_periods,
+)
+
+from finance_tools import (
+    compare_finance_periods,
+    get_finance_metric,
+    get_finance_period,
 )
 
 from rfm_tools import (
@@ -43,10 +54,14 @@ from memory_tools import (
 
 
 FUNCTION_SPECS = [
+    # ========================================================
+    # КЛИЕНТЫ
+    # ========================================================
+
     ChatFunctionSpecification(
         name="get_customer_profile",
         description=(
-            "Получает профиль конкретного клиента "
+            "Получает фактический профиль конкретного клиента "
             "по customer_id."
         ),
         parameters={
@@ -91,7 +106,9 @@ FUNCTION_SPECS = [
         name="find_customer_by_name",
         description=(
             "Ищет клиента по имени, фамилии "
-            "или полному имени."
+            "или полному имени. "
+            "Используй, когда пользователь называет "
+            "конкретного человека."
         ),
         parameters={
             "type": "object",
@@ -116,7 +133,58 @@ FUNCTION_SPECS = [
     ),
 
     # ========================================================
-    # ПРОДАЖИ — ДНИ
+    # LIVE-ПРОДАЖИ
+    # ========================================================
+
+    ChatFunctionSpecification(
+        name="get_current_sales",
+        description=(
+            "Возвращает текущие продажи за сегодняшний "
+            "незакрытый день. "
+            "Используй для вопросов 'сегодня', 'сейчас', "
+            "'на текущий момент', 'сколько чеков сегодня', "
+            "'какая выручка сейчас'. "
+            "Дата определяется Python по часовому поясу магазина. "
+            "Не подменяй сегодняшний live-день "
+            "последним закрытым днём. "
+            "Live-сумма пока включает чеки CRM и не включает "
+            "внешние заказы и продажи без чека."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+
+    # ========================================================
+    # ПОКРЫТИЕ ДАННЫХ
+    # ========================================================
+
+    ChatFunctionSpecification(
+        name="get_sales_data_coverage",
+        description=(
+            "Возвращает точные границы доступности данных "
+            "о продажах и их детализацию. "
+            "ОБЯЗАТЕЛЬНО используй, если пользователь спрашивает "
+            "'за какие даты есть данные', "
+            "'с какого числа есть статистика', "
+            "'можешь ли сравнить такую дату', "
+            "'какие периоды доступны' или похожий вопрос. "
+            "Не утверждай самостоятельно, что дневные данные "
+            "доступны с открытия магазина. "
+            "Исторические данные до начала точной дневной "
+            "аналитики могут существовать только по полным месяцам, "
+            "а январь-февраль 2025 могут быть доступны "
+            "только единым объединённым периодом."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+
+    # ========================================================
+    # ЗАКРЫТЫЕ ДНИ
     # ========================================================
 
     ChatFunctionSpecification(
@@ -124,8 +192,8 @@ FUNCTION_SPECS = [
         description=(
             "Возвращает последний закрытый день магазина "
             "и сравнение с предыдущим закрытым днём. "
-            "Используй для вопросов про вчера, последний "
-            "закрытый день или последние продажи."
+            "Не используй для сегодняшнего незакрытого дня: "
+            "для него есть get_current_sales."
         ),
         parameters={
             "type": "object",
@@ -136,9 +204,13 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_daily_sales",
         description=(
-            "Возвращает продажи магазина "
-            "за одну конкретную дату. "
-            "Используй только когда нужен один день."
+            "Возвращает продажи за одну конкретную "
+            "закрытую дату в формате ДД.ММ.ГГГГ. "
+            "Точные дневные данные доступны не за всю историю. "
+            "Если пользователь спрашивает, за какие даты "
+            "есть дневные данные, используй "
+            "get_sales_data_coverage. "
+            "Не используй для сегодняшнего незакрытого дня."
         ),
         parameters={
             "type": "object",
@@ -159,10 +231,11 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_days",
         description=(
-            "Сравнивает два конкретных дня магазина. "
+            "Сравнивает два конкретных закрытых дня продаж. "
             "Используй только для двух отдельных дат. "
-            "Не используй для месяцев, годов "
-            "или диапазонов дат."
+            "Точные дневные данные доступны не за всю историю. "
+            "Если одна из дат недоступна, не придумывай "
+            "дневные показатели из месячного итога."
         ),
         parameters={
             "type": "object",
@@ -191,7 +264,7 @@ FUNCTION_SPECS = [
         name="get_recent_sales",
         description=(
             "Возвращает несколько последних "
-            "закрытых дней магазина."
+            "закрытых дней продаж."
         ),
         parameters={
             "type": "object",
@@ -210,16 +283,16 @@ FUNCTION_SPECS = [
     ),
 
     # ========================================================
-    # ПРОДАЖИ — МЕСЯЦЫ
+    # МЕСЯЦЫ ПРОДАЖ
     # ========================================================
 
     ChatFunctionSpecification(
         name="get_month_summary",
         description=(
-            "Возвращает показатели одного календарного месяца. "
-            "Если текущий месяц ещё не завершён, "
-            "возвращает доступную часть месяца. "
-            "Используй для вопроса про один конкретный месяц."
+            "Возвращает показатели одного календарного "
+            "месяца продаж. "
+            "Для текущего месяца возвращает доступную часть "
+            "по последнему закрытому дню."
         ),
         parameters={
             "type": "object",
@@ -233,7 +306,7 @@ FUNCTION_SPECS = [
                 "month": {
                     "type": "integer",
                     "description": (
-                        "Номер месяца от 1 до 12"
+                        "Месяц от 1 до 12"
                     ),
                 },
             },
@@ -247,15 +320,15 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_months",
         description=(
-            "Сравнивает два календарных месяца магазина. "
-            "Особенно полезен для текущего незавершённого месяца: "
-            "Python автоматически делает честное like-for-like "
-            "сравнение одинакового количества дней. "
-            "Например, 1–17 августа против 1–17 июля. "
-            "Используй для запросов вроде "
-            "'сравни август с июлем', "
-            "'май лучше апреля?', "
-            "'как август идёт относительно июля'."
+            "Сравнивает два календарных месяца "
+            "по показателям продаж. "
+            "Для текущего незавершённого месяца Python делает "
+            "сопоставимое like-for-like сравнение "
+            "одинакового числа дней. "
+            "Используй для выручки, чеков, среднего чека, "
+            "КТЧ, внешних заказов и других показателей продаж. "
+            "Для прибыли, маржинальности, рентабельности, EBITDA, "
+            "роялти и расходов используй финансовые инструменты."
         ),
         parameters={
             "type": "object",
@@ -295,22 +368,18 @@ FUNCTION_SPECS = [
     ),
 
     # ========================================================
-    # ПРОДАЖИ — УНИВЕРСАЛЬНАЯ АНАЛИТИКА
+    # ПРОИЗВОЛЬНЫЕ ПЕРИОДЫ ПРОДАЖ
     # ========================================================
 
     ChatFunctionSpecification(
         name="get_sales_period_summary",
         description=(
-            "Возвращает показатели за произвольный диапазон дат. "
-            "Используй для запросов вроде "
-            "'сколько продали с апреля по июнь', "
-            "'выручка за второй квартал', "
-            "'покажи продажи с 5 по 17 августа'. "
-            "Python сам объединяет доступные дневные "
-            "и исторические месячные данные. "
-            "Если для старого диапазона нужна детализация, "
-            "которой нет, инструмент честно вернёт ошибку "
-            "insufficient_granularity и ничего не выдумает."
+            "Возвращает показатели продаж за произвольный "
+            "диапазон дат. "
+            "Используй для выручки, чеков, среднего чека, "
+            "КТЧ, внешних заказов и других показателей продаж. "
+            "Для финансовых показателей ОПиУ используй "
+            "get_finance_period_summary или get_finance_metric."
         ),
         parameters={
             "type": "object",
@@ -338,15 +407,13 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_periods",
         description=(
-            "Сравнивает два произвольных диапазона дат. "
-            "Используй для запросов вроде "
-            "'сравни март–май с июнем–августом', "
-            "'сравни 1–15 июля с 1–15 августа', "
-            "'сравни второй квартал с первым'. "
-            "Если пользователь просто сравнивает два "
-            "календарных месяца и один из них текущий, "
-            "предпочитай compare_sales_months, потому что "
-            "он автоматически делает like-for-like."
+            "Сравнивает два произвольных диапазона дат "
+            "по показателям продаж: выручке, чекам, "
+            "среднему чеку, КТЧ, внешним заказам "
+            "и другим доступным метрикам. "
+            "Для прибыли, маржинальности, рентабельности, "
+            "EBITDA, роялти, себестоимости и расходов "
+            "используй compare_finance_periods."
         ),
         parameters={
             "type": "object",
@@ -385,16 +452,19 @@ FUNCTION_SPECS = [
         },
     ),
 
+    # ========================================================
+    # ГОДЫ ПРОДАЖ
+    # ========================================================
+
     ChatFunctionSpecification(
         name="get_sales_year_summary",
         description=(
-            "Возвращает показатели календарного года. "
-            "Для текущего года возвращает данные "
-            "с 1 января по последний закрытый день. "
-            "Используй для вопросов вроде "
-            "'сколько заработали по выручке в 2025 году', "
-            "'какая выручка за 2026 год'. "
-            "Не называй выручку прибылью."
+            "Возвращает сводку продаж за календарный год. "
+            "Используй для выручки, чеков и других "
+            "показателей продаж. "
+            "Если вопрос про прибыль, маржинальность, "
+            "рентабельность или расходы года, "
+            "используй финансовые инструменты."
         ),
         parameters={
             "type": "object",
@@ -415,12 +485,10 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="compare_sales_years",
         description=(
-            "Сравнивает два года по доступным данным. "
-            "Используй для запросов вроде "
-            "'сравни 2025 и 2026 годы'. "
-            "Если один год ещё не завершён, "
-            "результат содержит предупреждение об этом. "
-            "Не скрывай это предупреждение в ответе."
+            "Сравнивает два календарных года по продажам. "
+            "Для прибыли, рентабельности и расходов "
+            "используй compare_finance_periods "
+            "с диапазонами месяцев."
         ),
         parameters={
             "type": "object",
@@ -448,28 +516,13 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="rank_sales_periods",
         description=(
-            "Находит лучшие или худшие дни, месяцы или годы "
-            "по выбранному показателю. "
-            "Используй для запросов вроде "
-            "'самый сильный месяц по выручке', "
-            "'топ-5 дней августа', "
-            "'месяц с самым большим средним чеком', "
-            "'худшие три месяца по выручке', "
-            "'день с максимальным количеством чеков'. "
-            "granularity: day, month или year. "
-            "metric: total_revenue для выручки; "
-            "average_check для среднего чека; "
-            "checks для количества чеков; "
-            "items для количества товаров; "
-            "ktch для товаров на чек; "
-            "external_total для внешней выручки; "
-            "external_orders для внешних заказов; "
-            "check_revenue_net для нетто-выручки по чекам. "
-            "Если пользователь говорит именно о прибыли "
-            "или марже, передай metric='profit'. "
-            "Python специально откажется считать прибыль, "
-            "пока нет полной себестоимости и расходов. "
-            "Никогда не подменяй прибыль выручкой молча."
+            "Ранжирует дни, месяцы или годы только "
+            "по показателям продаж: total_revenue, "
+            "average_check, checks, items, ktch, "
+            "check_revenue_net, external_total, external_orders. "
+            "Не используй этот инструмент для прибыли, маржи, "
+            "маржинальности, рентабельности, EBITDA, роялти "
+            "или расходов: это финансовые показатели ОПиУ."
         ),
         parameters={
             "type": "object",
@@ -482,32 +535,27 @@ FUNCTION_SPECS = [
                         "year",
                     ],
                     "description": (
-                        "Что ранжировать: "
                         "day, month или year"
                     ),
                 },
                 "metric": {
                     "type": "string",
                     "description": (
-                        "Показатель: total_revenue, "
-                        "average_check, checks, items, "
-                        "ktch, check_revenue_net, "
-                        "external_total, external_orders "
-                        "или profit"
+                        "total_revenue, average_check, checks, "
+                        "items, ktch, check_revenue_net, "
+                        "external_total или external_orders"
                     ),
                 },
                 "date_from": {
                     "type": "string",
                     "description": (
-                        "Необязательная начальная дата "
-                        "ДД.ММ.ГГГГ"
+                        "Необязательная дата от ДД.ММ.ГГГГ"
                     ),
                 },
                 "date_to": {
                     "type": "string",
                     "description": (
-                        "Необязательная конечная дата "
-                        "ДД.ММ.ГГГГ"
+                        "Необязательная дата до ДД.ММ.ГГГГ"
                     ),
                 },
                 "order": {
@@ -517,8 +565,7 @@ FUNCTION_SPECS = [
                         "asc",
                     ],
                     "description": (
-                        "desc — лучшие/максимальные, "
-                        "asc — худшие/минимальные"
+                        "desc — максимум, asc — минимум"
                     ),
                 },
                 "limit": {
@@ -530,17 +577,13 @@ FUNCTION_SPECS = [
                 "min_checks": {
                     "type": "integer",
                     "description": (
-                        "Необязательный минимальный "
-                        "порог количества чеков. "
-                        "Полезен для рейтинга "
-                        "по среднему чеку."
+                        "Минимальное количество чеков"
                     ),
                 },
                 "include_partial": {
                     "type": "boolean",
                     "description": (
-                        "Включать ли незавершённые "
-                        "месяцы или годы в рейтинг. "
+                        "Включать незавершённые месяцы или годы. "
                         "По умолчанию false."
                     ),
                 },
@@ -548,6 +591,185 @@ FUNCTION_SPECS = [
             "required": [
                 "granularity",
                 "metric",
+            ],
+        },
+    ),
+
+    # ========================================================
+    # ФИНАНСЫ / ОПиУ
+    # ========================================================
+
+    ChatFunctionSpecification(
+        name="get_finance_metric",
+        description=(
+            "Возвращает один финансовый показатель "
+            "из управленческого ОПиУ за диапазон целых месяцев "
+            "или за весь доступный закрытый период. "
+            "ОБЯЗАТЕЛЬНО используй для вопросов про прибыль, "
+            "маржу, маржинальность, рентабельность, "
+            "себестоимость, валовую прибыль, EBITDA, "
+            "чистую прибыль, роялти, аренду, зарплату, "
+            "эквайринг, комиссии доставок, рекламу, налоги "
+            "и долю расходов в выручке. "
+            "Если start_month и end_month не переданы, "
+            "считается весь доступный период; "
+            "текущий незакрытый месяц по умолчанию исключается. "
+            "Простое слово 'рентабельность' неоднозначно: "
+            "Python вернёт варианты, не выбирай один вид сам. "
+            "Периоды задаются целыми месяцами, например 2026-01. "
+            "Нельзя молча рассчитывать финансовые показатели "
+            "для части месяца: в ОПиУ нет дневной "
+            "детализации расходов."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "description": (
+                        "Название показателя обычным языком: "
+                        "маржинальность, чистая рентабельность, "
+                        "EBITDA, роялти, аренда, налоги, "
+                        "себестоимость и т.д."
+                    ),
+                },
+                "start_month": {
+                    "type": "string",
+                    "description": (
+                        "Необязательный первый месяц периода: "
+                        "YYYY-MM, MM.YYYY или название месяца и год"
+                    ),
+                },
+                "end_month": {
+                    "type": "string",
+                    "description": (
+                        "Необязательный последний месяц периода: "
+                        "YYYY-MM, MM.YYYY или название месяца и год"
+                    ),
+                },
+                "include_partial": {
+                    "type": "boolean",
+                    "description": (
+                        "Включать текущий незакрытый месяц. "
+                        "По умолчанию false. "
+                        "При true результат предварительный."
+                    ),
+                },
+            },
+            "required": [
+                "metric",
+            ],
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="get_finance_period_summary",
+        description=(
+            "Возвращает полный финансовый отчёт ОПиУ "
+            "за диапазон целых месяцев: выручку, себестоимость, "
+            "валовую прибыль, маржинальность, наценку, "
+            "коммерческие расходы, аренду, банковские расходы, "
+            "эквайринг, комиссии доставок, роялти, зарплату, "
+            "рекламу, списания, прибыль от продаж, EBITDA, "
+            "финансовую деятельность, прибыль до налогов, "
+            "налоги, чистую прибыль и рассчитанные "
+            "рентабельности. "
+            "Если месяцы не указаны, возвращает весь "
+            "доступный закрытый период. "
+            "Текущий месяц по умолчанию исключается. "
+            "Используй, когда пользователь просит финансовый "
+            "отчёт, ОПиУ, все финансовые показатели "
+            "или структуру расходов. "
+            "Не используй для части месяца: "
+            "финансовые данные месячные."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "start_month": {
+                    "type": "string",
+                    "description": (
+                        "Необязательный первый месяц: "
+                        "YYYY-MM, MM.YYYY или название месяца и год"
+                    ),
+                },
+                "end_month": {
+                    "type": "string",
+                    "description": (
+                        "Необязательный последний месяц: "
+                        "YYYY-MM, MM.YYYY или название месяца и год"
+                    ),
+                },
+                "include_partial": {
+                    "type": "boolean",
+                    "description": (
+                        "Включать текущий незакрытый месяц. "
+                        "По умолчанию false."
+                    ),
+                },
+            },
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="compare_finance_periods",
+        description=(
+            "Сравнивает два финансовых периода "
+            "по управленческому ОПиУ. "
+            "Сравнивает не только выручку, но и себестоимость, "
+            "валовую прибыль, маржинальность, наценку, роялти, "
+            "аренду, зарплату, эквайринг, комиссии доставок, "
+            "рекламу, списания, прибыль от продаж, EBITDA, "
+            "прибыль до налогов, налоги, чистую прибыль "
+            "и рентабельности. "
+            "Используй для запросов вроде "
+            "'сравни I и II квартал по финансам' "
+            "или 'сравни январь-март с апрелем-июнем "
+            "по маржинальности и прибыли'. "
+            "Границы задаются целыми месяцами. "
+            "Не округляй запрос с частичных дат "
+            "до полных месяцев без явного согласия."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "start_a": {
+                    "type": "string",
+                    "description": (
+                        "Первый месяц периода A, например 2026-01"
+                    ),
+                },
+                "end_a": {
+                    "type": "string",
+                    "description": (
+                        "Последний месяц периода A, например 2026-03"
+                    ),
+                },
+                "start_b": {
+                    "type": "string",
+                    "description": (
+                        "Первый месяц периода B, например 2026-04"
+                    ),
+                },
+                "end_b": {
+                    "type": "string",
+                    "description": (
+                        "Последний месяц периода B, например 2026-06"
+                    ),
+                },
+                "include_partial": {
+                    "type": "boolean",
+                    "description": (
+                        "Включать текущий незакрытый месяц. "
+                        "По умолчанию false."
+                    ),
+                },
+            },
+            "required": [
+                "start_a",
+                "end_a",
+                "start_b",
+                "end_b",
             ],
         },
     ),
@@ -571,8 +793,7 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_rfm_segment",
         description=(
-            "Возвращает клиентов конкретного "
-            "RFM-сегмента."
+            "Возвращает клиентов конкретного RFM-сегмента."
         ),
         parameters={
             "type": "object",
@@ -592,8 +813,7 @@ FUNCTION_SPECS = [
                 "sort_by": {
                     "type": "string",
                     "description": (
-                        "monetary, recency, "
-                        "frequency или overdue"
+                        "monetary, recency, frequency или overdue"
                     ),
                 },
             },
@@ -603,14 +823,17 @@ FUNCTION_SPECS = [
         },
     ),
 
+    # ========================================================
+    # ОБЗВОН
+    # ========================================================
+
     ChatFunctionSpecification(
         name="get_contact_candidates",
         description=(
-            "Возвращает список клиентов "
-            "для удержания или возврата. "
-            "Используй, если пользователь "
-            "просит несколько клиентов, "
-            "список или топ."
+            "Возвращает список клиентов для удержания "
+            "или возврата. "
+            "Используй, если нужен список или топ "
+            "нескольких клиентов."
         ),
         parameters={
             "type": "object",
@@ -638,11 +861,10 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_next_call_candidate",
         description=(
-            "Выбирает одного следующего клиента "
-            "для звонка. "
+            "Выбирает одного следующего клиента для звонка. "
             "Клиенты, уже предложенные сегодня "
-            "в этом разговоре, автоматически "
-            "исключаются Python-кодом. "
+            "в этом разговоре, автоматически исключаются "
+            "Python-кодом. "
             "Используй для 'кому сейчас позвонить', "
             "'а кому ещё', 'кто следующий'."
         ),
@@ -666,17 +888,9 @@ FUNCTION_SPECS = [
     ChatFunctionSpecification(
         name="get_customer_call_assessment",
         description=(
-            "Оценивает, стоит ли звонить "
-            "конкретному клиенту и насколько "
-            "он приоритетен для обзвона. "
-            "Используй для вопросов "
-            "'стоит ли ему звонить?', "
-            "'надо ли ей звонить?', "
-            "'насколько клиент приоритетный?'. "
-            "Приоритет рассчитывается Python-кодом. "
-            "Если истории повторных покупок мало, "
-            "инструмент не делает ложных выводов "
-            "о покупательском цикле."
+            "Оценивает, стоит ли звонить конкретному клиенту "
+            "и насколько он приоритетен для обзвона. "
+            "Приоритет рассчитывается Python-кодом."
         ),
         parameters={
             "type": "object",
@@ -706,15 +920,16 @@ TOOLS = [
 ]
 
 
+def build_sales_data_coverage():
+    return get_available_sales_coverage()
+
+
 def build_latest_day_report():
     latest = get_latest_sales_day()
 
-    if (
-        latest.get(
-            "status"
-        )
-        != "ok"
-    ):
+    if latest.get(
+        "status"
+    ) != "ok":
         return latest
 
     result = {
@@ -736,10 +951,14 @@ def build_latest_day_report():
         [],
     )
 
-    if len(days) >= 2:
+    if len(
+        days
+    ) >= 2:
         result[
             "previous_day"
-        ] = days[-2]
+        ] = days[
+            -2
+        ]
 
         result[
             "comparison_with_previous_day"
@@ -785,6 +1004,12 @@ def run_tool(
                 10,
             ),
         )
+
+    if name == "get_current_sales":
+        return get_current_sales()
+
+    if name == "get_sales_data_coverage":
+        return build_sales_data_coverage()
 
     if name == "get_latest_sales_day":
         return build_latest_day_report()
@@ -910,6 +1135,57 @@ def run_tool(
                 "min_checks",
                 0,
             ),
+            include_partial=arguments.get(
+                "include_partial",
+                False,
+            ),
+        )
+
+    if name == "get_finance_metric":
+        return get_finance_metric(
+            metric=arguments[
+                "metric"
+            ],
+            start_month=arguments.get(
+                "start_month"
+            ),
+            end_month=arguments.get(
+                "end_month"
+            ),
+            include_partial=arguments.get(
+                "include_partial",
+                False,
+            ),
+        )
+
+    if name == "get_finance_period_summary":
+        return get_finance_period(
+            start_month=arguments.get(
+                "start_month"
+            ),
+            end_month=arguments.get(
+                "end_month"
+            ),
+            include_partial=arguments.get(
+                "include_partial",
+                False,
+            ),
+        )
+
+    if name == "compare_finance_periods":
+        return compare_finance_periods(
+            start_a=arguments[
+                "start_a"
+            ],
+            end_a=arguments[
+                "end_a"
+            ],
+            start_b=arguments[
+                "start_b"
+            ],
+            end_b=arguments[
+                "end_b"
+            ],
             include_partial=arguments.get(
                 "include_partial",
                 False,
@@ -1070,12 +1346,9 @@ def compact_result(
         }
 
     if tool_name == "find_customer_by_name":
-        if (
-            result.get(
-                "status"
-            )
-            == "unique_match"
-        ):
+        if result.get(
+            "status"
+        ) == "unique_match":
             profile = result.get(
                 "profile",
                 {},
@@ -1109,6 +1382,171 @@ def compact_result(
                 },
             }
 
+    if tool_name == "get_finance_period_summary":
+        if result.get(
+            "status"
+        ) != "ok":
+            return result
+
+        nonzero_line_items = [
+            item
+            for item in result.get(
+                "line_items",
+                [],
+            )
+            if abs(
+                float(
+                    item.get(
+                        "amount",
+                        0,
+                    )
+                    or 0
+                )
+            ) > 0.000001
+        ]
+
+        return {
+            "status":
+                result.get(
+                    "status"
+                ),
+
+            "source":
+                result.get(
+                    "source"
+                ),
+
+            "requested_period":
+                result.get(
+                    "requested_period"
+                ),
+
+            "actual_period":
+                result.get(
+                    "actual_period"
+                ),
+
+            "months_count":
+                result.get(
+                    "months_count"
+                ),
+
+            "contains_partial_month":
+                result.get(
+                    "contains_partial_month"
+                ),
+
+            "excluded_partial_months":
+                result.get(
+                    "excluded_partial_months"
+                ),
+
+            "metrics":
+                result.get(
+                    "metrics"
+                ),
+
+            "line_items":
+                nonzero_line_items,
+
+            "warnings":
+                result.get(
+                    "warnings"
+                ),
+
+            "calculation_notes":
+                result.get(
+                    "calculation_notes"
+                ),
+        }
+
+    if tool_name == "compare_finance_periods":
+        if result.get(
+            "status"
+        ) != "ok":
+            return result
+
+        period_a = result.get(
+            "period_a",
+            {},
+        )
+
+        period_b = result.get(
+            "period_b",
+            {},
+        )
+
+        return {
+            "status":
+                result.get(
+                    "status"
+                ),
+
+            "source":
+                result.get(
+                    "source"
+                ),
+
+            "period_a": {
+                "actual_period":
+                    period_a.get(
+                        "actual_period"
+                    ),
+
+                "months_count":
+                    period_a.get(
+                        "months_count"
+                    ),
+
+                "contains_partial_month":
+                    period_a.get(
+                        "contains_partial_month"
+                    ),
+
+                "metrics":
+                    period_a.get(
+                        "metrics"
+                    ),
+
+                "warnings":
+                    period_a.get(
+                        "warnings"
+                    ),
+            },
+
+            "period_b": {
+                "actual_period":
+                    period_b.get(
+                        "actual_period"
+                    ),
+
+                "months_count":
+                    period_b.get(
+                        "months_count"
+                    ),
+
+                "contains_partial_month":
+                    period_b.get(
+                        "contains_partial_month"
+                    ),
+
+                "metrics":
+                    period_b.get(
+                        "metrics"
+                    ),
+
+                "warnings":
+                    period_b.get(
+                        "warnings"
+                    ),
+            },
+
+            "comparison":
+                result.get(
+                    "comparison"
+                ),
+        }
+
     return result
 
 
@@ -1141,8 +1579,8 @@ def demo():
         "AGENT TOOLS — TEST"
     )
     print("=" * 70)
-
     print()
+
     print(
         "Зарегистрированные инструменты:"
     )
@@ -1158,21 +1596,34 @@ def demo():
     )
 
     print_short_result(
-        "АПРЕЛЬ 2025 ПРОТИВ МАЯ 2025",
+        "ПОКРЫТИЕ ДАННЫХ ПРОДАЖ",
         run_tool(
-            "compare_sales_months",
+            "get_sales_data_coverage",
+            {},
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
+
+    print_short_result(
+        "LIVE-ПРОДАЖИ ЗА СЕГОДНЯ",
+        run_tool(
+            "get_current_sales",
+            {},
+            conversation_id=(
+                "__agent_tools_test__"
+            ),
+        ),
+    )
+
+    print_short_result(
+        "МАРЖИНАЛЬНОСТЬ ЗА ВЕСЬ ЗАКРЫТЫЙ ПЕРИОД",
+        run_tool(
+            "get_finance_metric",
             {
-                "year_a":
-                    2025,
-
-                "month_a":
-                    4,
-
-                "year_b":
-                    2025,
-
-                "month_b":
-                    5,
+                "metric":
+                    "маржинальность",
             },
             conversation_id=(
                 "__agent_tools_test__"
@@ -1181,127 +1632,21 @@ def demo():
     )
 
     print_short_result(
-        "ПРОИЗВОЛЬНЫЙ ПЕРИОД: АПРЕЛЬ–МАЙ 2026",
+        "I КВАРТАЛ 2026 VS II КВАРТАЛ 2026 — ФИНАНСЫ",
         run_tool(
-            "get_sales_period_summary",
-            {
-                "start_date":
-                    "01.04.2026",
-
-                "end_date":
-                    "31.05.2026",
-            },
-            conversation_id=(
-                "__agent_tools_test__"
-            ),
-        ),
-    )
-
-    print_short_result(
-        "СРАВНЕНИЕ ДВУХ ПРОИЗВОЛЬНЫХ ПЕРИОДОВ",
-        run_tool(
-            "compare_sales_periods",
+            "compare_finance_periods",
             {
                 "start_a":
-                    "01.07.2026",
+                    "2026-01",
 
                 "end_a":
-                    "17.07.2026",
+                    "2026-03",
 
                 "start_b":
-                    "01.08.2026",
+                    "2026-04",
 
                 "end_b":
-                    "17.08.2026",
-            },
-            conversation_id=(
-                "__agent_tools_test__"
-            ),
-        ),
-    )
-
-    print_short_result(
-        "2025 ГОД",
-        run_tool(
-            "get_sales_year_summary",
-            {
-                "year":
-                    2025,
-            },
-            conversation_id=(
-                "__agent_tools_test__"
-            ),
-        ),
-    )
-
-    print_short_result(
-        "ТОП-3 МЕСЯЦА ПО ВЫРУЧКЕ",
-        run_tool(
-            "rank_sales_periods",
-            {
-                "granularity":
-                    "month",
-
-                "metric":
-                    "total_revenue",
-
-                "order":
-                    "desc",
-
-                "limit":
-                    3,
-            },
-            conversation_id=(
-                "__agent_tools_test__"
-            ),
-        ),
-    )
-
-    print_short_result(
-        "ТОП-3 ДНЯ АВГУСТА ПО СРЕДНЕМУ ЧЕКУ",
-        run_tool(
-            "rank_sales_periods",
-            {
-                "granularity":
-                    "day",
-
-                "metric":
-                    "average_check",
-
-                "date_from":
-                    "01.08.2026",
-
-                "date_to":
-                    "17.08.2026",
-
-                "order":
-                    "desc",
-
-                "limit":
-                    3,
-
-                "min_checks":
-                    20,
-            },
-            conversation_id=(
-                "__agent_tools_test__"
-            ),
-        ),
-    )
-
-    print_short_result(
-        "ПРИБЫЛЬ — ДОЛЖЕН БЫТЬ ОТКАЗ",
-        run_tool(
-            "rank_sales_periods",
-            {
-                "granularity":
-                    "month",
-
-                "metric":
-                    "profit",
-
-                "limit":
-                    3,
+                    "2026-06",
             },
             conversation_id=(
                 "__agent_tools_test__"
