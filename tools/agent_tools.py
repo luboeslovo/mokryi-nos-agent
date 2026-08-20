@@ -19,6 +19,7 @@ from sales_tools import (
 )
 
 from live_sales_tools import (
+    compare_current_sales_with_yesterday,
     get_current_sales,
 )
 
@@ -148,8 +149,36 @@ FUNCTION_SPECS = [
             "Дата определяется Python по часовому поясу магазина. "
             "Не подменяй сегодняшний live-день "
             "последним закрытым днём. "
+            "Если пользователь просит сравнить сегодня и вчера, "
+            "НЕ используй этот инструмент отдельно: используй "
+            "compare_current_sales_with_yesterday. "
             "Live-сумма пока включает чеки CRM и не включает "
             "внешние заказы и продажи без чека."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+    ),
+
+    ChatFunctionSpecification(
+        name="compare_current_sales_with_yesterday",
+        description=(
+            "Сравнивает сегодняшний незакрытый день "
+            "со вчерашним днём ДО ОДИНАКОВОГО ВРЕМЕНИ "
+            "по одной чековой базе checks_raw.csv. "
+            "ОБЯЗАТЕЛЬНО используй для запросов "
+            "'сравни сегодня и вчера', "
+            "'сегодня против вчера', "
+            "'как сегодня относительно вчера', "
+            "'сегодня лучше или хуже вчера'. "
+            "Не вызывай отдельно get_current_sales и "
+            "полный закрытый вчерашний день для такого сравнения. "
+            "Инструмент сам определяет сегодняшний день, вчера, "
+            "актуальный cutoff и рассчитывает изменения. "
+            "Внешние заказы и продажи без чека сюда не входят, "
+            "поэтому возвращаемая выручка является чековой/кассовой, "
+            "а не полной управленческой выручкой магазина."
         ),
         parameters={
             "type": "object",
@@ -1275,6 +1304,9 @@ def run_tool(
 
     if name == "get_current_sales":
         return get_current_sales()
+
+    if name == "compare_current_sales_with_yesterday":
+        return compare_current_sales_with_yesterday()
 
     if name == "get_sales_data_coverage":
         return build_sales_data_coverage()
