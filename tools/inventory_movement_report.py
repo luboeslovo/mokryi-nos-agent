@@ -57,6 +57,7 @@ DEFAULT_NODE_EXE = (
 DEFAULT_NODE_MODULES = DEFAULT_NODE_EXE.parents[1] / "node_modules"
 
 ZERO = Decimal("0")
+PROCUREMENT_TOTAL_TOLERANCE = Decimal("0.01")
 DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 CARD_LINK_RE = re.compile(r"/nomenclatureFranchisee/(\d+)")
 INTAKE_LINK_RE = re.compile(r"/intake/(\d+)(?:\D|$)")
@@ -108,6 +109,13 @@ class IntakeAggregate:
     values: dict[int, BalanceValue] = field(default_factory=dict)
     line_count: int = 0
     document_count: int = 0
+
+
+@dataclass(frozen=True)
+class ProcurementControl:
+    item_rows_amount: Decimal
+    item_row_count: int
+    server_total: Decimal | None
 
 
 def clean_text(value: Any) -> str:
@@ -760,7 +768,9 @@ def parse_html_number(value: Any) -> Decimal:
     return parse_decimal(clean_text(text), field_name="procurement.amount")
 
 
-async def fetch_procurement_control(page: Page, start: date, end: date) -> Decimal | None:
+async def fetch_procurement_control(
+    page: Page, start: date, end: date
+) -> ProcurementControl | None:
     params = [
         ("showReport", "1"),
         ("filters[dateRange]", f"{crm_date(start)} - {crm_date(end)}"),
@@ -794,15 +804,59 @@ async def fetch_procurement_control(page: Page, start: date, end: date) -> Decim
         )
         await page.wait_for_timeout(500)
         rows = await page.evaluate("() => window.jQuery('#grid').jqxTreeGrid('getRows')")
-        return sum(
-            (parse_html_number(row.get("range_0")) for row in flatten_grid_rows(rows)),
-            ZERO,
-        )
     except AuthExpired:
         raise
     except Exception as error:
         print(f"Предупреждение: контроль /reports/procurement/index недоступен: {error}", flush=True)
         return None
+
+    item_rows: list[dict[str, Any]] = []
+    service_rows: list[dict[str, Any]] = []
+    for row in flatten_grid_rows(rows):
+        if row.get("articul") not in (None, ""):
+            item_rows.append(row)
+        else:
+            service_rows.append(row)
+
+    server_total: Decimal | None = None
+    for row in service_rows:
+        row_id = row.get("id")
+        row_name = clean_text(html.unescape(re.sub(r"<[^>]+>", " ", str(row.get("name") or ""))))
+        if str(row_id) == "-2" and row_name.casefold() == "итого" and server_total is None:
+            server_total = parse_html_number(row.get("range_0"))
+            continue
+        identifying_fields = {
+            key: row.get(key)
+            for key in ("id", "name", "articul", "nomenclature_id", "group_name", "uid")
+            if key in row
+        }
+        raise ReportError(
+            "Контроль procurement вернул неожиданную нетоварную строку: "
+            f"id={row_id!r}, identifying_fields={identifying_fields!r}, "
+            f"available_fields={sorted(row)}."
+        )
+
+    item_rows_amount = sum(
+        (parse_html_number(row.get("range_0")) for row in item_rows),
+        ZERO,
+    )
+    if server_total is None:
+        print(
+            "Предупреждение: контроль procurement не вернул ожидаемую серверную строку «Итого» "
+            "(id=-2); сумма рассчитана только по товарным строкам.",
+            flush=True,
+        )
+    elif abs(item_rows_amount - server_total) > PROCUREMENT_TOTAL_TOLERANCE:
+        raise ReportError(
+            "Контроль procurement: сумма товарных строк не совпала с серверной строкой «Итого»: "
+            f"item rows={item_rows_amount:.6f}, server total={server_total:.6f}, "
+            f"tolerance={PROCUREMENT_TOTAL_TOLERANCE:.2f}."
+        )
+    return ProcurementControl(
+        item_rows_amount=item_rows_amount,
+        item_row_count=len(item_rows),
+        server_total=server_total,
+    )
 
 
 def run_auto_login() -> None:
@@ -1307,11 +1361,21 @@ def print_controls(collected: dict[str, Any], rows: list[dict[str, Any]]) -> Non
     print(f"  Суммарная сумма прихода: {intake_amount:.2f}")
     print(f"  Сумма остатков на начало: {opening_amount:.2f}")
     print(f"  Сумма остатков на конец: {ending_amount:.2f}")
-    procurement: Decimal | None = collected["procurement"]
+    procurement: ProcurementControl | None = collected["procurement"]
     if procurement is not None:
-        discrepancy = procurement - intake_amount
-        print(f"  Контроль /reports/procurement/index: {procurement:.2f}")
-        print(f"  Расхождение procurement - intake: {discrepancy:.2f}")
+        discrepancy = procurement.item_rows_amount - intake_amount
+        server_total = (
+            f"{procurement.server_total:.2f}"
+            if procurement.server_total is not None
+            else "отсутствует"
+        )
+        print(f"  Intake amount: {intake_amount:.2f}")
+        print(
+            f"  Procurement item rows amount ({procurement.item_row_count}): "
+            f"{procurement.item_rows_amount:.2f}"
+        )
+        print(f"  Procurement server total: {server_total}")
+        print(f"  Difference intake vs procurement: {discrepancy:.2f}")
 
 
 def print_first_rows(rows: list[dict[str, Any]]) -> None:
