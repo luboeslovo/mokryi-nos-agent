@@ -118,6 +118,41 @@ class ProcurementControl:
     server_total: Decimal | None
 
 
+@dataclass(frozen=True)
+class InventoryMovementReportResult:
+    output_path: Path
+    start_date: date
+    end_date: date
+    brand: str | None
+    category: str | None
+    row_count: int
+    intake_document_count: int
+    intake_quantity: Decimal
+    intake_amount: Decimal
+    procurement_item_rows_amount: Decimal | None
+    procurement_server_total: Decimal | None
+    verified: bool
+
+
+@dataclass(frozen=True)
+class ReportControls:
+    opening_item_count: int
+    intake_item_count: int
+    ending_item_count: int
+    union_item_count: int
+    row_count: int
+    intake_document_count: int
+    intake_line_count: int
+    intake_quantity: Decimal
+    intake_amount: Decimal
+    opening_amount: Decimal
+    ending_amount: Decimal
+    procurement_item_row_count: int | None
+    procurement_item_rows_amount: Decimal | None
+    procurement_server_total: Decimal | None
+    procurement_difference: Decimal | None
+
+
 def clean_text(value: Any) -> str:
     return " ".join(str(value or "").replace("\xa0", " ").split())
 
@@ -1340,7 +1375,9 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
         }
 
 
-def print_controls(collected: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+def calculate_controls(
+    collected: dict[str, Any], rows: list[dict[str, Any]]
+) -> ReportControls:
     opening: dict[int, BalanceValue] = collected["opening"]
     ending: dict[int, BalanceValue] = collected["ending"]
     intake: IntakeAggregate = collected["intake"]
@@ -1349,33 +1386,65 @@ def print_controls(collected: dict[str, Any], rows: list[dict[str, Any]]) -> Non
     intake_amount = sum((value.amount for value in intake.values.values()), ZERO)
     opening_amount = sum((value.amount for value in opening.values()), ZERO)
     ending_amount = sum((value.amount for value in ending.values()), ZERO)
-    print("\nКонтрольные показатели:")
-    print(f"  Товаров в начальном снимке: {len(opening)}")
-    print(f"  Товаров с приходом: {len(intake.values)}")
-    print(f"  Товаров в конечном снимке: {len(ending)}")
-    print(f"  Размер UNION до фильтра: {len(raw_union)}")
-    print(f"  Строк после итогового фильтра: {len(rows)}")
-    print(f"  Проведённых intake-документов: {intake.document_count}")
-    print(f"  Уникальных intake lines: {intake.line_count}")
-    print(f"  Суммарное количество прихода: {intake_quantity}")
-    print(f"  Суммарная сумма прихода: {intake_amount:.2f}")
-    print(f"  Сумма остатков на начало: {opening_amount:.2f}")
-    print(f"  Сумма остатков на конец: {ending_amount:.2f}")
     procurement: ProcurementControl | None = collected["procurement"]
+    procurement_item_row_count = None
+    procurement_item_rows_amount = None
+    procurement_server_total = None
+    procurement_difference = None
     if procurement is not None:
-        discrepancy = procurement.item_rows_amount - intake_amount
+        procurement_item_row_count = procurement.item_row_count
+        procurement_item_rows_amount = procurement.item_rows_amount
+        procurement_server_total = procurement.server_total
+        procurement_difference = procurement.item_rows_amount - intake_amount
+
+    return ReportControls(
+        opening_item_count=len(opening),
+        intake_item_count=len(intake.values),
+        ending_item_count=len(ending),
+        union_item_count=len(raw_union),
+        row_count=len(rows),
+        intake_document_count=intake.document_count,
+        intake_line_count=intake.line_count,
+        intake_quantity=intake_quantity,
+        intake_amount=intake_amount,
+        opening_amount=opening_amount,
+        ending_amount=ending_amount,
+        procurement_item_row_count=procurement_item_row_count,
+        procurement_item_rows_amount=procurement_item_rows_amount,
+        procurement_server_total=procurement_server_total,
+        procurement_difference=procurement_difference,
+    )
+
+
+def print_controls(controls: ReportControls) -> None:
+    print("\nКонтрольные показатели:")
+    print(f"  Товаров в начальном снимке: {controls.opening_item_count}")
+    print(f"  Товаров с приходом: {controls.intake_item_count}")
+    print(f"  Товаров в конечном снимке: {controls.ending_item_count}")
+    print(f"  Размер UNION до фильтра: {controls.union_item_count}")
+    print(f"  Строк после итогового фильтра: {controls.row_count}")
+    print(f"  Проведённых intake-документов: {controls.intake_document_count}")
+    print(f"  Уникальных intake lines: {controls.intake_line_count}")
+    print(f"  Суммарное количество прихода: {controls.intake_quantity}")
+    print(f"  Суммарная сумма прихода: {controls.intake_amount:.2f}")
+    print(f"  Сумма остатков на начало: {controls.opening_amount:.2f}")
+    print(f"  Сумма остатков на конец: {controls.ending_amount:.2f}")
+    if controls.procurement_item_rows_amount is not None:
         server_total = (
-            f"{procurement.server_total:.2f}"
-            if procurement.server_total is not None
+            f"{controls.procurement_server_total:.2f}"
+            if controls.procurement_server_total is not None
             else "отсутствует"
         )
-        print(f"  Intake amount: {intake_amount:.2f}")
+        print(f"  Intake amount: {controls.intake_amount:.2f}")
         print(
-            f"  Procurement item rows amount ({procurement.item_row_count}): "
-            f"{procurement.item_rows_amount:.2f}"
+            f"  Procurement item rows amount ({controls.procurement_item_row_count}): "
+            f"{controls.procurement_item_rows_amount:.2f}"
         )
         print(f"  Procurement server total: {server_total}")
-        print(f"  Difference intake vs procurement: {discrepancy:.2f}")
+        print(
+            "  Difference intake vs procurement: "
+            f"{controls.procurement_difference:.2f}"
+        )
 
 
 def print_first_rows(rows: list[dict[str, Any]]) -> None:
@@ -1403,21 +1472,23 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def main() -> int:
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    args = parse_args()
-    output = args.output or Path(
-        f"Отчет движения товара {crm_date(args.start)}-{crm_date(args.end)}.xlsx"
-    )
-    output = output.resolve()
+def generate_inventory_movement_report(
+    start: date,
+    end: date,
+    output_path: Path,
+    brand: str | None = None,
+    category: str | None = None,
+) -> InventoryMovementReportResult:
+    if start > end:
+        raise ReportError("Дата начала отчёта не может быть позже даты окончания.")
+
+    output = Path(output_path).resolve()
     if output.suffix.lower() != ".xlsx":
         raise ReportError("Параметр --output должен указывать файл с расширением .xlsx.")
 
-    collected = asyncio.run(collect_report(args.start, args.end))
-    rows = build_rows(collected, args.brand, args.category)
-    if (args.brand or args.category) and not rows:
+    collected = asyncio.run(collect_report(start, end))
+    rows = build_rows(collected, brand, category)
+    if (brand or category) and not rows:
         raise ReportError("После применения фактических CRM-фильтров не осталось товаров.")
 
     notes = [
@@ -1427,19 +1498,56 @@ def main() -> int:
         notes.append(
             "Ограничения supplier SKU по cities[]/filials[] не применялись: их семантика в CRM неоднозначна, поэтому связи не отбрасывались молча."
         )
-    if args.end == date.today():
+    if end == date.today():
         notes.append("Остаток на конец текущего дня указан на момент формирования отчёта.")
 
-    print_controls(collected, rows)
+    controls = calculate_controls(collected, rows)
+    print_controls(controls)
     print_first_rows(rows)
-    write_workbook(output, args.start, args.end, rows, filter_text(args.brand, args.category), notes)
-    verification = reopen_and_verify_xlsx(output, args.start, args.end, len(rows))
+    write_workbook(output, start, end, rows, filter_text(brand, category), notes)
+    if not output.is_file():
+        raise ReportError(f"XLSX не был создан: {output}")
+    if output.stat().st_size <= 0:
+        raise ReportError(f"Создан пустой XLSX: {output}")
+    verification = reopen_and_verify_xlsx(output, start, end, len(rows))
     print("\nПроверка созданного XLSX через Python:")
     print(f"  Лист: {verification['sheet']}")
     print("  A1, даты, merged ranges и A8:J9: корректны")
     print(f"  Строк данных: {verification['data_rows']}")
     print("  Количества, суммы и Артикул ИТ: числовые")
     print(f"\nГотовый файл: {output}")
+
+    return InventoryMovementReportResult(
+        output_path=output,
+        start_date=start,
+        end_date=end,
+        brand=brand,
+        category=category,
+        row_count=controls.row_count,
+        intake_document_count=controls.intake_document_count,
+        intake_quantity=controls.intake_quantity,
+        intake_amount=controls.intake_amount,
+        procurement_item_rows_amount=controls.procurement_item_rows_amount,
+        procurement_server_total=controls.procurement_server_total,
+        verified=True,
+    )
+
+
+def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    args = parse_args()
+    output = args.output or Path(
+        f"Отчет движения товара {crm_date(args.start)}-{crm_date(args.end)}.xlsx"
+    )
+    generate_inventory_movement_report(
+        start=args.start,
+        end=args.end,
+        output_path=output,
+        brand=args.brand,
+        category=args.category,
+    )
     return 0
 
 
