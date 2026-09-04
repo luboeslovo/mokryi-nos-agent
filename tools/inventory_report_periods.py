@@ -15,12 +15,14 @@ EXPLICIT_RANGE = "explicit_range"
 NAMED_MONTH = "named_month"
 PREVIOUS_MONTH = "previous_month"
 CURRENT_MONTH = "current_month"
+DAY_RANGE_IN_MONTH = "day_range_in_month"
 
 SUPPORTED_PERIOD_KINDS = {
     EXPLICIT_RANGE,
     NAMED_MONTH,
     PREVIOUS_MONTH,
     CURRENT_MONTH,
+    DAY_RANGE_IN_MONTH,
 }
 
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -172,6 +174,68 @@ def _resolve_current_month(period_kind: str, reference_date: date) -> InventoryR
     )
 
 
+def _resolve_day_range_in_month(
+    period_kind: str,
+    start_day: int | None,
+    end_day: int | None,
+    month: int | None,
+    year: int | None,
+    reference_date: date,
+) -> InventoryReportPeriod:
+    if start_day is None:
+        return _needs_clarification(period_kind, "Укажите начальный день периода.")
+
+    if end_day is None:
+        return _needs_clarification(period_kind, "Укажите конечный день периода.")
+
+    if month is None:
+        return _needs_clarification(period_kind, "Укажите месяц периода.")
+
+    if isinstance(start_day, bool) or not isinstance(start_day, int):
+        return _error(period_kind, "Начальный день периода должен быть целым числом.")
+
+    if isinstance(end_day, bool) or not isinstance(end_day, int):
+        return _error(period_kind, "Конечный день периода должен быть целым числом.")
+
+    if isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12:
+        return _error(period_kind, "Месяц должен быть целым числом от 1 до 12.")
+
+    if start_day > end_day:
+        return _error(
+            period_kind,
+            "Начальный день периода не может быть позже конечного дня.",
+        )
+
+    if year is not None:
+        if isinstance(year, bool) or not isinstance(year, int) or not 1 <= year <= 9999:
+            return _error(period_kind, "Год должен быть целым числом от 1 до 9999.")
+        resolved_year = year
+    else:
+        if month > reference_date.month:
+            return _needs_clarification(
+                period_kind,
+                "Укажите год для выбранного месяца.",
+            )
+        resolved_year = reference_date.year
+
+    try:
+        resolved_start = date(resolved_year, month, start_day)
+        resolved_end = date(resolved_year, month, end_day)
+    except ValueError:
+        return _error(
+            period_kind,
+            "Диапазон содержит несуществующую календарную дату.",
+        )
+
+    if resolved_end > reference_date:
+        return _error(
+            period_kind,
+            "Дата окончания периода не может быть позже текущей даты магазина.",
+        )
+
+    return _ok(period_kind, resolved_start, resolved_end)
+
+
 def _resolve_named_month(
     period_kind: str,
     month: int | None,
@@ -220,6 +284,8 @@ def resolve_inventory_report_period(
     *,
     start_date: str | date | None = None,
     end_date: str | date | None = None,
+    start_day: int | None = None,
+    end_day: int | None = None,
     month: int | None = None,
     year: int | None = None,
     reference_date: date | None = None,
@@ -242,5 +308,15 @@ def resolve_inventory_report_period(
 
     if kind == CURRENT_MONTH:
         return _resolve_current_month(kind, reference)
+
+    if kind == DAY_RANGE_IN_MONTH:
+        return _resolve_day_range_in_month(
+            kind,
+            start_day,
+            end_day,
+            month,
+            year,
+            reference,
+        )
 
     return _resolve_named_month(kind, month, year, reference)

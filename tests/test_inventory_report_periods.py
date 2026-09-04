@@ -193,6 +193,142 @@ class InventoryReportPeriodTests(unittest.TestCase):
     def test_u_store_timezone_is_europe_moscow(self):
         self.assertEqual(periods.STORE_TIMEZONE.key, "Europe/Moscow")
 
+    def test_v_day_range_in_past_month_without_year_uses_reference_year(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=18,
+            month=8,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assert_ok(result, date(2026, 8, 1), date(2026, 8, 18))
+
+    def test_w_day_range_in_current_month_with_past_end_is_ok(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=3,
+            month=9,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assert_ok(result, date(2026, 9, 1), date(2026, 9, 3))
+
+    def test_x_day_range_in_current_month_with_future_end_is_error(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=18,
+            month=9,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "error")
+
+    def test_y_day_range_in_future_month_without_year_needs_clarification(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=18,
+            month=12,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification, "Укажите год для выбранного месяца.")
+
+    def test_z_day_range_with_explicit_past_year_is_ok(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=18,
+            month=8,
+            year=2025,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assert_ok(result, date(2025, 8, 1), date(2025, 8, 18))
+
+    def test_aa_day_range_without_start_day_needs_clarification(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            end_day=18,
+            month=8,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification, "Укажите начальный день периода.")
+
+    def test_ab_day_range_without_end_day_needs_clarification(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            month=8,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification, "Укажите конечный день периода.")
+
+    def test_ac_day_range_without_month_needs_clarification(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=18,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "needs_clarification")
+        self.assertEqual(result.clarification, "Укажите месяц периода.")
+
+    def test_ad_day_range_with_start_after_end_is_error(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=18,
+            end_day=1,
+            month=8,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "error")
+
+    def test_ae_day_range_with_february_31_is_error(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=31,
+            month=2,
+            year=2026,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "error")
+
+    def test_af_day_range_with_april_31_is_error(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=1,
+            end_day=31,
+            month=4,
+            year=2026,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "error")
+
+    def test_ag_day_range_accepts_leap_day_in_leap_year(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=29,
+            end_day=29,
+            month=2,
+            year=2024,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assert_ok(result, date(2024, 2, 29), date(2024, 2, 29))
+
+    def test_ah_day_range_rejects_leap_day_in_non_leap_year(self):
+        result = periods.resolve_inventory_report_period(
+            "day_range_in_month",
+            start_day=29,
+            end_day=29,
+            month=2,
+            year=2025,
+            reference_date=date(2026, 9, 4),
+        )
+        self.assertEqual(result.status, "error")
+
 
 if __name__ == "__main__":
     unittest.main()

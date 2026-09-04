@@ -355,6 +355,134 @@ class InventoryReportServiceTests(unittest.TestCase):
             self.assertEqual(Path(artifact.filename).name, artifact.filename)
             self.assertNotIn(str(Path(temp_root)), artifact.filename)
 
+    def test_o_day_range_without_year_reaches_generator(self):
+        generator = Mock(side_effect=self.successful_generator)
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=18,
+                month=8,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assert_success(artifact, date(2026, 8, 1), date(2026, 8, 18))
+
+        call = generator.call_args.kwargs
+        self.assertEqual(call["start"], date(2026, 8, 1))
+        self.assertEqual(call["end"], date(2026, 8, 18))
+
+    def test_p_day_range_with_explicit_year_reaches_generator(self):
+        generator = Mock(side_effect=self.successful_generator)
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=18,
+                month=8,
+                year=2025,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assert_success(artifact, date(2025, 8, 1), date(2025, 8, 18))
+
+        call = generator.call_args.kwargs
+        self.assertEqual(call["start"], date(2025, 8, 1))
+        self.assertEqual(call["end"], date(2025, 8, 18))
+
+    def test_q_day_range_in_current_month_with_past_end_reaches_generator(self):
+        generator = Mock(side_effect=self.successful_generator)
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=3,
+                month=9,
+                year=2026,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assert_success(artifact, date(2026, 9, 1), date(2026, 9, 3))
+
+        call = generator.call_args.kwargs
+        self.assertEqual(call["start"], date(2026, 9, 1))
+        self.assertEqual(call["end"], date(2026, 9, 3))
+
+    def test_r_day_range_in_current_month_with_future_end_does_not_generate(self):
+        generator = Mock()
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=18,
+                month=9,
+                year=2026,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assertEqual(list(Path(temp_root).iterdir()), [])
+
+        self.assertEqual(artifact.status, "error")
+        generator.assert_not_called()
+
+    def test_s_day_range_in_future_month_without_year_does_not_generate(self):
+        generator = Mock()
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=18,
+                month=12,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assertEqual(list(Path(temp_root).iterdir()), [])
+
+        self.assertEqual(artifact.status, "needs_clarification")
+        self.assertEqual(artifact.clarification, "Укажите год для выбранного месяца.")
+        generator.assert_not_called()
+
+    def test_t_day_range_with_invalid_calendar_date_does_not_generate(self):
+        generator = Mock()
+        with tempfile.TemporaryDirectory() as temp_root, patch.object(
+            service,
+            "generate_inventory_movement_report",
+            generator,
+        ):
+            artifact = service.prepare_inventory_movement_report(
+                "day_range_in_month",
+                start_day=1,
+                end_day=31,
+                month=2,
+                year=2026,
+                reference_date=date(2026, 9, 4),
+                temp_root=Path(temp_root),
+            )
+            self.assertEqual(list(Path(temp_root).iterdir()), [])
+
+        self.assertEqual(artifact.status, "error")
+        generator.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
