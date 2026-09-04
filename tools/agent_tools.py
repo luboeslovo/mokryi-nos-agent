@@ -55,7 +55,7 @@ from memory_tools import (
 )
 
 
-FUNCTION_SPECS = [
+TEXT_FUNCTION_SPECS = [
     # ========================================================
     # КЛИЕНТЫ
     # ========================================================
@@ -1080,14 +1080,36 @@ FUNCTION_SPECS = [
 ]
 
 
-TOOLS = [
+REQUEST_FUNCTION_SPECS = [
+    *TEXT_FUNCTION_SPECS,
+]
+
+
+# Backward-compatible aliases for existing text-only callers.
+FUNCTION_SPECS = TEXT_FUNCTION_SPECS
+
+
+TEXT_TOOLS = [
     ChatTool(
         functions={
             "specifications":
-                FUNCTION_SPECS,
+                TEXT_FUNCTION_SPECS,
         }
     )
 ]
+
+
+REQUEST_TOOLS = [
+    ChatTool(
+        functions={
+            "specifications":
+                REQUEST_FUNCTION_SPECS,
+        }
+    )
+]
+
+
+TOOLS = TEXT_TOOLS
 
 
 def build_sales_data_coverage():

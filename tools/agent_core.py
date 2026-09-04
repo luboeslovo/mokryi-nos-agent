@@ -18,9 +18,14 @@ from agent_prompts import (
 )
 
 from agent_tools import (
-    TOOLS,
+    REQUEST_TOOLS,
+    TEXT_TOOLS,
     compact_result,
     run_tool,
+)
+
+from agent_response import (
+    AgentResponse,
 )
 
 from agent_followups import (
@@ -1074,20 +1079,29 @@ def handle_customer_list_call_followup(
 
 def save_and_return(
     conversation_id,
-    answer,
+    response,
 ):
+    if not isinstance(
+        response,
+        AgentResponse,
+    ):
+        response = AgentResponse(
+            text=response,
+        )
+
     save_message(
         conversation_id,
         "assistant",
-        answer,
+        response.text,
     )
 
-    return answer
+    return response
 
 
-def answer_question(
+def _answer_request(
     question,
-    conversation_id="console",
+    conversation_id,
+    tools,
 ):
     conversation_id = str(
         conversation_id
@@ -1100,8 +1114,8 @@ def answer_question(
     ).strip()
 
     if not question:
-        return (
-            "Напиши вопрос о магазине."
+        return AgentResponse(
+            text="Напиши вопрос о магазине.",
         )
 
     history_messages = (
@@ -1206,7 +1220,7 @@ def answer_question(
 
     request = ChatCompletionRequest(
         messages=request_messages,
-        tools=TOOLS,
+        tools=tools,
     )
 
     first_response = (
@@ -1293,6 +1307,15 @@ def answer_question(
                     f"{error}"
                 ),
         }
+
+    if isinstance(
+        tool_result,
+        AgentResponse,
+    ):
+        return save_and_return(
+            conversation_id,
+            tool_result,
+        )
 
     real_data = compact_result(
         tool_name,
@@ -1472,6 +1495,28 @@ def answer_question(
         conversation_id,
         answer,
     )
+
+
+def answer_request(
+    question,
+    conversation_id="console",
+) -> AgentResponse:
+    return _answer_request(
+        question,
+        conversation_id,
+        REQUEST_TOOLS,
+    )
+
+
+def answer_question(
+    question,
+    conversation_id="console",
+) -> str:
+    return _answer_request(
+        question,
+        conversation_id,
+        TEXT_TOOLS,
+    ).text
 
 
 def run_demo_question(
