@@ -7,10 +7,16 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import uuid
+from pathlib import Path
 
 import keyring
 
-from agent_core import answer_question
+from agent_core import answer_request
+from agent_response import (
+    AgentResponse,
+    DocumentArtifact,
+)
 from agent_tools import run_tool
 
 
@@ -176,6 +182,136 @@ def telegram_request(
         )
 
     if not result.get("ok"):
+        raise RuntimeError(
+            f"Telegram API error: {result}"
+        )
+
+    return result["result"]
+
+
+def _multipart_header_value(
+    value,
+    field_label,
+):
+    text = str(
+        value
+    )
+
+    if (
+        "\r" in text
+        or "\n" in text
+    ):
+        raise ValueError(
+            f"{field_label} содержит "
+            "недопустимый перенос строки."
+        )
+
+    return text.replace(
+        "\\",
+        "\\\\",
+    ).replace(
+        '"',
+        '\\"',
+    )
+
+
+def telegram_multipart_request(
+    method,
+    fields,
+    *,
+    file_field,
+    filename,
+    mime_type,
+    file_bytes,
+    timeout=60,
+):
+    boundary = (
+        "----MokryiNosTelegram"
+        + uuid.uuid4().hex
+    )
+    boundary_bytes = boundary.encode(
+        "ascii"
+    )
+    chunks = []
+
+    for field_name, value in fields.items():
+        safe_field_name = (
+            _multipart_header_value(
+                field_name,
+                "Имя multipart-поля",
+            )
+        )
+        chunks.extend(
+            [
+                b"--" + boundary_bytes + b"\r\n",
+                (
+                    "Content-Disposition: form-data; "
+                    f'name="{safe_field_name}"\r\n\r\n'
+                ).encode("utf-8"),
+                str(value).encode("utf-8"),
+                b"\r\n",
+            ]
+        )
+
+    safe_file_field = _multipart_header_value(
+        file_field,
+        "Имя файлового multipart-поля",
+    )
+    safe_filename = _multipart_header_value(
+        filename,
+        "Имя документа",
+    )
+    safe_mime_type = _multipart_header_value(
+        mime_type,
+        "MIME type документа",
+    )
+    chunks.extend(
+        [
+            b"--" + boundary_bytes + b"\r\n",
+            (
+                "Content-Disposition: form-data; "
+                f'name="{safe_file_field}"; '
+                f'filename="{safe_filename}"\r\n'
+            ).encode("utf-8"),
+            (
+                f"Content-Type: {safe_mime_type}"
+                "\r\n\r\n"
+            ).encode("utf-8"),
+            file_bytes,
+            b"\r\n",
+            b"--" + boundary_bytes + b"--\r\n",
+        ]
+    )
+
+    request = urllib.request.Request(
+        f"{BASE_URL}/{method}",
+        data=b"".join(
+            chunks
+        ),
+        headers={
+            "Content-Type": (
+                "multipart/form-data; "
+                f"boundary={boundary}"
+            ),
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(
+        request,
+        timeout=timeout,
+    ) as response:
+        result = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    if (
+        not isinstance(
+            result,
+            dict,
+        )
+        or result.get("ok") is not True
+    ):
         raise RuntimeError(
             f"Telegram API error: {result}"
         )
@@ -518,6 +654,146 @@ def send_message(
                 "reply_markup":
                     get_main_keyboard(),
             },
+        )
+
+
+def _validate_document_artifact(
+    artifact,
+):
+    try:
+        path = Path(
+            artifact.path
+        )
+    except (
+        TypeError,
+        ValueError,
+        OSError,
+    ) as error:
+        raise ValueError(
+            "Некорректный путь документа."
+        ) from error
+
+    if not path.exists():
+        raise FileNotFoundError(
+            "Файл документа не найден."
+        )
+
+    if not path.is_file():
+        raise ValueError(
+            "Путь документа не является файлом."
+        )
+
+    if path.stat().st_size <= 0:
+        raise ValueError(
+            "Файл документа пуст."
+        )
+
+    filename = str(
+        artifact.filename
+        or ""
+    ).strip()
+
+    if not filename:
+        raise ValueError(
+            "Имя документа не указано."
+        )
+
+    if (
+        "/" in filename
+        or "\\" in filename
+    ):
+        raise ValueError(
+            "Имя документа не должно "
+            "содержать путь."
+        )
+
+    mime_type = str(
+        artifact.mime_type
+        or ""
+    ).strip()
+
+    if not mime_type:
+        raise ValueError(
+            "MIME type документа не указан."
+        )
+
+    return (
+        path,
+        filename,
+        mime_type,
+    )
+
+
+def send_document(
+    chat_id,
+    artifact: DocumentArtifact,
+    caption: str | None = None,
+):
+    (
+        path,
+        filename,
+        mime_type,
+    ) = _validate_document_artifact(
+        artifact
+    )
+
+    fields = {
+        "chat_id":
+            chat_id,
+    }
+
+    if caption is not None:
+        caption_text = str(
+            caption
+        )
+
+        if str(path) in caption_text:
+            raise ValueError(
+                "Подпись документа не должна "
+                "содержать локальный путь."
+            )
+
+        fields[
+            "caption"
+        ] = caption_text
+
+    result = telegram_multipart_request(
+        "sendDocument",
+        fields,
+        file_field="document",
+        filename=filename,
+        mime_type=mime_type,
+        file_bytes=path.read_bytes(),
+    )
+
+    if artifact.delete_after_send:
+        path.unlink()
+
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
+    return result
+
+
+def send_agent_response(
+    chat_id,
+    response: AgentResponse,
+):
+    if str(
+        response.text
+        or ""
+    ).strip():
+        send_message(
+            chat_id,
+            response.text,
+        )
+
+    for artifact in response.documents:
+        send_document(
+            chat_id,
+            artifact,
         )
 
 
@@ -1440,7 +1716,7 @@ def handle_message(
             "Агент думает..."
         )
 
-        answer = answer_question(
+        response = answer_request(
             text,
             conversation_id=conversation_id,
         )
@@ -1451,12 +1727,12 @@ def handle_message(
         )
 
         print(
-            answer
+            response.text
         )
 
-        send_message(
+        send_agent_response(
             chat_id,
-            answer,
+            response,
         )
 
     except Exception as error:
