@@ -28,6 +28,11 @@ from agent_response import (
     AgentResponse,
 )
 
+from inventory_report_request_parser import (
+    INVENTORY_TOOL_NAME,
+    normalize_inventory_report_arguments,
+)
+
 from agent_followups import (
     is_customer_list_call_followup,
     is_last_call_reason_followup,
@@ -805,6 +810,12 @@ def normalize_tool_arguments(
         arguments
         or {}
     )
+
+    if tool_name == INVENTORY_TOOL_NAME:
+        return normalize_inventory_report_arguments(
+            question,
+            result,
+        )
 
     if (
         tool_name

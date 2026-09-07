@@ -54,6 +54,10 @@ from memory_tools import (
     get_today_suggested_customer_ids,
 )
 
+from inventory_report_agent_tool import (
+    run_inventory_report_agent_tool,
+)
+
 
 TEXT_FUNCTION_SPECS = [
     # ========================================================
@@ -1080,8 +1084,71 @@ TEXT_FUNCTION_SPECS = [
 ]
 
 
+INVENTORY_MOVEMENT_REPORT_SPEC = ChatFunctionSpecification(
+    name="generate_inventory_movement_report",
+    description=(
+        "Создаёт и проверяет XLSX-отчёт движения товара за указанный период. "
+        "Используй, когда пользователь просит сформировать, создать или "
+        "прислать отчёт/Excel движения товара."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "period_kind": {
+                "type": "string",
+                "enum": [
+                    "explicit_range",
+                    "named_month",
+                    "previous_month",
+                    "current_month",
+                    "day_range_in_month",
+                ],
+            },
+            "start_date": {
+                "type": "string",
+                "description": "Явно указанная полная дата начала YYYY-MM-DD.",
+            },
+            "end_date": {
+                "type": "string",
+                "description": "Явно указанная полная дата окончания YYYY-MM-DD.",
+            },
+            "start_day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31,
+            },
+            "end_day": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31,
+            },
+            "month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12,
+            },
+            "year": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9999,
+            },
+            "brand": {
+                "type": "string",
+            },
+            "category": {
+                "type": "string",
+            },
+        },
+        "required": [
+            "period_kind",
+        ],
+    },
+)
+
+
 REQUEST_FUNCTION_SPECS = [
     *TEXT_FUNCTION_SPECS,
+    INVENTORY_MOVEMENT_REPORT_SPEC,
 ]
 
 
@@ -1298,6 +1365,11 @@ def run_tool(
     arguments,
     conversation_id="console",
 ):
+    if name == "generate_inventory_movement_report":
+        return run_inventory_report_agent_tool(
+            arguments
+        )
+
     if name == "get_customer_profile":
         return get_customer_profile(
             arguments[

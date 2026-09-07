@@ -81,10 +81,142 @@ class AgentCoreResponseTests(unittest.TestCase):
             agent_tools.TEXT_FUNCTION_SPECS,
             agent_tools.REQUEST_FUNCTION_SPECS,
         )
-        self.assertEqual(text_names, request_names)
         self.assertEqual(len(text_names), 27)
-        self.assertNotIn("generate_inventory_movement_report", request_names)
+        self.assertEqual(len(request_names), 28)
+        self.assertNotIn("generate_inventory_movement_report", text_names)
+        self.assertEqual(
+            request_names.count("generate_inventory_movement_report"),
+            1,
+        )
+        self.assertEqual(request_names[:-1], text_names)
+        self.assertIs(
+            agent_tools.FUNCTION_SPECS,
+            agent_tools.TEXT_FUNCTION_SPECS,
+        )
         self.assertIs(agent_tools.TOOLS, agent_tools.TEXT_TOOLS)
+
+    def test_inventory_response_uses_existing_artifact_short_circuit(self):
+        private_path = Path(r"C:\secret\private\inventory.xlsx")
+        raw_arguments = {
+            "period_kind": "day_range_in_month",
+            "start_day": 1,
+            "year": 2025,
+        }
+        grounded_arguments = {
+            "period_kind": "day_range_in_month",
+            "start_day": 1,
+            "end_day": 18,
+            "month": 8,
+        }
+        artifact_response = AgentResponse(
+            text="Отчёт движения товара за 01.08.2026–18.08.2026 сформирован.",
+            documents=(
+                DocumentArtifact(
+                    path=private_path,
+                    filename="inventory.xlsx",
+                    mime_type=(
+                        "application/vnd.openxmlformats-officedocument."
+                        "spreadsheetml.sheet"
+                    ),
+                ),
+            ),
+        )
+        create = Mock(
+            return_value=chat_response(
+                function_call=tool_call(
+                    "generate_inventory_movement_report",
+                    raw_arguments,
+                )
+            )
+        )
+
+        with patch.object(agent_core.client.chat, "create", create), patch.object(
+            agent_core,
+            "run_tool",
+            return_value=artifact_response,
+        ) as run_tool_mock, patch.object(
+            agent_core,
+            "compact_result",
+        ) as compact_result_mock, patch.object(
+            agent_core.json,
+            "dumps",
+        ) as json_dumps_mock:
+            response = agent_core.answer_request(
+                "Сформируй движение товара с 1 по 18 августа.",
+                conversation_id="test:inventory-artifact",
+            )
+
+        self.assertIs(response, artifact_response)
+        self.assertEqual(create.call_count, 1)
+        run_tool_mock.assert_called_once_with(
+            "generate_inventory_movement_report",
+            grounded_arguments,
+            conversation_id="test:inventory-artifact",
+        )
+        compact_result_mock.assert_not_called()
+        json_dumps_mock.assert_not_called()
+
+        first_request = create.call_args.args[0]
+        for message in first_request.messages:
+            self.assertNotIn(
+                str(private_path),
+                str(getattr(message, "content", "")),
+            )
+
+        self.save_message.assert_has_calls(
+            [
+                call(
+                    "test:inventory-artifact",
+                    "user",
+                    "Сформируй движение товара с 1 по 18 августа.",
+                ),
+                call(
+                    "test:inventory-artifact",
+                    "assistant",
+                    artifact_response.text,
+                ),
+            ]
+        )
+        for saved_call in self.save_message.call_args_list:
+            self.assertNotIn(str(private_path), str(saved_call.args[2]))
+
+    def test_non_inventory_arguments_keep_existing_normalization(self):
+        arguments = {
+            "segment": "champions",
+            "limit": 5,
+        }
+
+        normalized = agent_core.normalize_tool_arguments(
+            "get_rfm_segment",
+            "Покажи сегмент.",
+            arguments,
+            latest_data_date="17.08.2026",
+        )
+
+        self.assertEqual(normalized, arguments)
+
+    def test_answer_question_passes_legacy_text_tools(self):
+        with patch.object(
+            agent_core,
+            "_answer_request",
+            return_value=AgentResponse(text="Текстовый ответ."),
+        ) as answer_request_mock:
+            answer = agent_core.answer_question(
+                "Обычный вопрос.",
+                conversation_id="test:text-registry",
+            )
+
+        self.assertEqual(answer, "Текстовый ответ.")
+        answer_request_mock.assert_called_once_with(
+            "Обычный вопрос.",
+            "test:text-registry",
+            agent_core.TEXT_TOOLS,
+        )
+        text_names = {
+            specification.name
+            for specification in agent_tools.TEXT_FUNCTION_SPECS
+        }
+        self.assertNotIn("generate_inventory_movement_report", text_names)
 
     def test_answer_request_without_tool_returns_agent_response(self):
         create = Mock(return_value=chat_response("Обычный ответ."))
