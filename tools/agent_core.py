@@ -11,6 +11,8 @@ from gigachat.models import (
     ChatMessage,
 )
 
+from gigachat_tls import get_gigachat_ca_bundle_file
+
 from agent_prompts import (
     FINAL_SYSTEM_PROMPT,
     build_main_system_prompt,
@@ -197,7 +199,8 @@ client = GigaChat(
     credentials=get_authorization_key(),
     scope=SCOPE,
     model=MODEL,
-    verify_ssl_certs=False,
+    verify_ssl_certs=True,
+    ca_bundle_file=get_gigachat_ca_bundle_file(),
     timeout=60,
 )
 

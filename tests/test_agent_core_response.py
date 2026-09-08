@@ -9,10 +9,13 @@ TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 with patch("keyring.get_password", return_value="test-authorization-key"), patch(
-    "gigachat.GigaChat"
-):
+    "gigachat_tls.get_gigachat_ca_bundle_file",
+    return_value="test-gigachat-ca-bundle.pem",
+), patch("gigachat.GigaChat") as gigachat_client:
     import agent_core
     import agent_tools
+
+GIGACHAT_CLIENT_CALL = gigachat_client.call_args
 
 from agent_response import AgentResponse, DocumentArtifact
 
@@ -461,6 +464,21 @@ class AgentCoreResponseTests(unittest.TestCase):
         self.assertIsInstance(answer, str)
         self.assertEqual(answer, "Детерминированный ответ.")
         create.assert_not_called()
+
+    def test_gigachat_client_uses_verified_app_scoped_ca_bundle(self):
+        arguments = GIGACHAT_CLIENT_CALL.kwargs
+
+        self.assertEqual(arguments["credentials"], "test-authorization-key")
+        self.assertEqual(arguments["scope"], agent_core.SCOPE)
+        self.assertEqual(arguments["model"], agent_core.MODEL)
+        self.assertIs(arguments["verify_ssl_certs"], True)
+        self.assertEqual(
+            arguments["ca_bundle_file"],
+            "test-gigachat-ca-bundle.pem",
+        )
+        self.assertEqual(arguments["timeout"], 60)
+        self.assertNotIn("base_url", arguments)
+        self.assertNotIn("auth_url", arguments)
 
 
 if __name__ == "__main__":
