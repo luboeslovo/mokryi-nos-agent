@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1187,6 +1188,7 @@ def write_workbook(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_root = Path(tempfile.mkdtemp(prefix="inventory_movement_report_"))
     junction = temp_root / "node_modules"
+    exported_workbook = temp_root / output_path.name
     try:
         create_runtime_junction(junction, node_modules)
         builder = temp_root / "build_report.mjs"
@@ -1214,7 +1216,7 @@ def write_workbook(
                 for item in rows
             ],
             "notes": notes,
-            "outputPath": str(output_path),
+            "outputPath": str(exported_workbook),
         }
         data_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         completed = subprocess.run(
@@ -1229,9 +1231,20 @@ def write_workbook(
                 "@oai/artifact-tool не смог сформировать XLSX: "
                 + clean_text(completed.stderr or completed.stdout)
             )
+        try:
+            exported_metadata = exported_workbook.stat()
+        except FileNotFoundError as error:
+            raise ReportError(
+                "@oai/artifact-tool не создал итоговый XLSX."
+            ) from error
+        if not stat.S_ISREG(
+            exported_metadata.st_mode
+        ):
+            raise ReportError("@oai/artifact-tool не создал итоговый XLSX.")
+        exported_workbook.replace(output_path)
     finally:
         remove_runtime_junction(junction)
-        shutil.rmtree(temp_root, ignore_errors=True)
+        shutil.rmtree(temp_root)
 
 
 def column_index(cell_ref: str) -> int:

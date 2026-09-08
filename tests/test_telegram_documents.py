@@ -411,6 +411,35 @@ class TelegramDocumentTransportTests(unittest.TestCase):
                 str(raised.exception),
             )
 
+    def test_access_error_does_not_become_missing_file(self):
+        with tempfile.TemporaryDirectory() as temp_root:
+            path = Path(temp_root) / "restricted.xlsx"
+            path.write_bytes(b"xlsx")
+            transport = Mock()
+
+            with patch.object(
+                Path,
+                "stat",
+                side_effect=PermissionError(
+                    "synthetic access denied"
+                ),
+            ), patch.object(
+                telegram_bot,
+                "telegram_multipart_request",
+                transport,
+            ):
+                with self.assertRaisesRegex(
+                    PermissionError,
+                    "Нет доступа к файлу документа",
+                ):
+                    telegram_bot.send_document(
+                        1,
+                        self.artifact(path),
+                    )
+
+            transport.assert_not_called()
+            self.assertTrue(path.is_file())
+
     def test_empty_file_does_not_call_transport(self):
         with tempfile.TemporaryDirectory() as temp_root:
             path = Path(temp_root) / "empty.xlsx"

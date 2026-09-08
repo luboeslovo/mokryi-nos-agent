@@ -2,6 +2,7 @@ import html
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -673,17 +674,25 @@ def _validate_document_artifact(
             "Некорректный путь документа."
         ) from error
 
-    if not path.exists():
+    try:
+        metadata = path.stat()
+    except FileNotFoundError as error:
         raise FileNotFoundError(
             "Файл документа не найден."
-        )
+        ) from error
+    except PermissionError as error:
+        raise PermissionError(
+            "Нет доступа к файлу документа."
+        ) from error
 
-    if not path.is_file():
+    if not stat.S_ISREG(
+        metadata.st_mode
+    ):
         raise ValueError(
             "Путь документа не является файлом."
         )
 
-    if path.stat().st_size <= 0:
+    if metadata.st_size <= 0:
         raise ValueError(
             "Файл документа пуст."
         )
