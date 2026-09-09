@@ -27,6 +27,24 @@ from xml.etree import ElementTree as ET
 
 from playwright.async_api import BrowserContext, Error as PlaywrightError, Page, async_playwright
 
+from inventory_workbook_contract import (
+    PARAMETERS_SHEET_NAME,
+    REPORT_FIRST_DATA_ROW,
+    REPORT_HEADERS,
+    REPORT_HEADER_ROW,
+    REPORT_LOADED_END_CELL,
+    REPORT_LOADED_START_CELL,
+    REPORT_SHEET_NAME,
+    REPORT_TABLE_NAME,
+    TOTAL_COLUMNS,
+    WorkbookContractError,
+    read_inventory_workbook_state,
+    subtotal_formulas,
+    table_end_row,
+    total_row,
+    workbook_contract_payload,
+)
+
 
 BASE_URL = "https://it.mokryinos.ru/"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1057,28 +1075,89 @@ import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
 
 const [dataPath] = process.argv.slice(2);
 const data = JSON.parse(await fs.readFile(dataPath, "utf8"));
+const contract = data.contract;
 const workbook = Workbook.create();
-const sheet = workbook.worksheets.add("Отчет движения товара");
+const parameters = workbook.worksheets.add(contract.parametersSheet);
+const sheet = workbook.worksheets.add(contract.reportSheet);
+parameters.showGridLines = false;
 sheet.showGridLines = false;
 
-sheet.getRange("A1").values = [["Отчет движения товара"]];
-sheet.getRange("A1").format = {fill: "#FFFFFF", font: {bold: true, color: "#000000", size: 18}};
-sheet.getRange("A3:E3").values = [["Период", "с", data.fromDisplay, "по", data.toDisplay]];
-sheet.getRange("A5:C5").values = [["Фильтр", "", data.filterText]];
-
-sheet.getRange("A8:J9").values = [
-  ["№ п.п.", "Категория ИТ", "Артикул в ИТ", "Артикул поставщика", "Остаток на начало", "", "Приход", "", "Остаток на конец", ""],
-  ["", "", "", "", "кв-во", "сумма", "кв-во", "сумма", "кв-во", "сумма"],
-];
-for (const address of ["A8:A9", "B8:B9", "C8:C9", "D8:D9", "E8:F8", "G8:H8", "I8:J8"]) {
-  sheet.mergeCells(address);
+function localDate(value) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
+
+parameters.mergeCells("A1:D1");
+parameters.getRange("A1").values = [["Параметры отчёта"]];
+parameters.getRange("A3:D3").values = [["Период для следующего обновления", "", "", ""]];
+parameters.getRange("A4").values = [["Дата начала"]];
+parameters.getRange("A5").values = [["Дата окончания"]];
+parameters.getRange(contract.requestedStartCell).values = [[localDate(data.requestedStart)]];
+parameters.getRange(contract.requestedEndCell).values = [[localDate(data.requestedEnd)]];
+parameters.getRange("A7:D7").values = [["Последнее успешное обновление", "", "", ""]];
+parameters.getRange("A8").values = [["Начало загруженного периода"]];
+parameters.getRange("A9").values = [["Конец загруженного периода"]];
+parameters.getRange("A10").values = [["Дата и время обновления"]];
+parameters.getRange(contract.loadedStartCell).values = [[localDate(data.loadedStart)]];
+parameters.getRange(contract.loadedEndCell).values = [[localDate(data.loadedEnd)]];
+parameters.getRange(contract.lastSuccessfulUpdateCell).values = [[new Date(data.generatedAt)]];
+parameters.mergeCells("A12:D12");
+parameters.getRange("A12").values = [["После изменения дат сохраните и закройте книгу, затем запустите «Обновить отчёт»."]];
+
+parameters.getRange("A1:D12").format.font = {name: "Arial", color: "#1F2937", size: 11};
+parameters.getRange("A1").format.font = {name: "Arial", bold: true, color: "#1F2937", size: 16};
+for (const rangeAddress of ["A3:D3", "A7:D7"]) {
+  parameters.getRange(rangeAddress).format = {
+    fill: "#E8EEF7",
+    font: {name: "Arial", bold: true, color: "#1F2937"},
+    borders: {preset: "outside", style: "thin", color: "#B8C2D1"},
+  };
+}
+parameters.getRange("A4:A5").format.font = {name: "Arial", bold: true, color: "#1F2937"};
+parameters.getRange("B4:B5").format = {
+  fill: "#FFF2CC",
+  font: {name: "Arial", bold: true, color: "#1F2937"},
+  horizontalAlignment: "center",
+  borders: {preset: "all", style: "thin", color: "#A67C00"},
+};
+parameters.getRange("B4:B5").setNumberFormat(contract.dateNumberFormat);
+parameters.getRange("B8:B9").setNumberFormat(contract.dateNumberFormat);
+parameters.getRange("B10").setNumberFormat(contract.dateTimeNumberFormat);
+parameters.getRange("B8:B10").format.fill = "#F3F4F6";
+parameters.getRange("A12:D12").format = {
+  fill: "#FFF8E1",
+  font: {name: "Arial", color: "#7A5200", italic: true},
+  wrapText: true,
+  verticalAlignment: "center",
+  borders: {preset: "outside", style: "thin", color: "#D6B656"},
+};
+parameters.getRange("A12:D12").format.rowHeight = 34;
+parameters.getRange("A:A").format.columnWidth = 34;
+parameters.getRange("B:B").format.columnWidth = 20;
+parameters.getRange("C:D").format.columnWidth = 12;
+
+sheet.mergeCells("A1:J1");
+sheet.mergeCells("A3:B3");
+sheet.getRange("A1").values = [["Отчет движения товара"]];
+sheet.getRange("A3").values = [["Фактический период"]];
+sheet.getRange(contract.reportLoadedStartCell).values = [[localDate(data.loadedStart)]];
+sheet.getRange("D3").values = [["—"]];
+sheet.getRange(contract.reportLoadedEndCell).values = [[localDate(data.loadedEnd)]];
+sheet.getRange("A5").values = [["Фильтр при формировании"]];
+sheet.getRange("C5").values = [[data.filterText]];
+sheet.getRange("E7:F7").merge();
+sheet.getRange("G7:H7").merge();
+sheet.getRange("I7:J7").merge();
+sheet.getRange("E7").values = [["Остаток на начало"]];
+sheet.getRange("G7").values = [["Приход"]];
+sheet.getRange("I7").values = [["Остаток на конец"]];
+sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).values = [contract.headers];
 
 const matrix = data.rows.map(row => [
   row.number,
   row.category,
+  row.brand,
   row.nmi_id,
-  row.suppliers,
   row.opening_quantity,
   row.opening_amount,
   row.intake_quantity,
@@ -1086,54 +1165,84 @@ const matrix = data.rows.map(row => [
   row.ending_quantity,
   row.ending_amount,
 ]);
-const lastDataRow = 9 + matrix.length;
 if (matrix.length) {
-  sheet.getRange(`A10:J${lastDataRow}`).values = matrix;
+  sheet.getRange(`A${contract.firstDataRow}:J${contract.tableEndRow}`).values = matrix;
+} else {
+  sheet.getRange(`A${contract.firstDataRow}:J${contract.firstDataRow}`).values = [[null, null, null, null, null, null, null, null, null, null]];
 }
 
-const usedEnd = Math.max(lastDataRow, 9);
+const inventoryTable = sheet.tables.add(
+  `A${contract.headerRow}:J${contract.tableEndRow}`,
+  true,
+  contract.tableName,
+);
+inventoryTable.style = "TableStyleMedium2";
+inventoryTable.showFilterButton = true;
+inventoryTable.showTotals = false;
+
+sheet.getRange(`A${contract.totalRow}:D${contract.totalRow}`).values = [["ИТОГО", "", "", ""]];
+sheet.getRange(`E${contract.totalRow}:J${contract.totalRow}`).formulas = [[
+  ...contract.totalColumns.map(column => contract.totalFormulas[column]),
+]];
+
+const usedEnd = contract.totalRow;
 sheet.getRange(`A1:J${usedEnd}`).format.fill = "#FFFFFF";
-sheet.getRange(`A1:J${usedEnd}`).format.font = {color: "#000000"};
-sheet.getRange("A1").format.font = {bold: true, color: "#000000", size: 18};
+sheet.getRange(`A1:J${usedEnd}`).format.font = {name: "Arial", color: "#1F2937", size: 11};
+sheet.getRange("A1").format.font = {name: "Arial", bold: true, color: "#1F2937", size: 18};
 sheet.getRange("A3:E3").format.verticalAlignment = "center";
-sheet.getRange("A3").format.font = {bold: true, color: "#000000"};
-sheet.getRange("A5").format.font = {bold: true, color: "#000000"};
-sheet.getRange("A8:J9").format = {
-  fill: "#FFFFFF",
-  font: {bold: true, color: "#000000"},
+sheet.getRange("A3").format.font = {name: "Arial", bold: true, color: "#1F2937"};
+sheet.getRange("C3").setNumberFormat(contract.dateNumberFormat);
+sheet.getRange("E3").setNumberFormat(contract.dateNumberFormat);
+sheet.getRange("A5").format.font = {name: "Arial", bold: true, color: "#1F2937"};
+sheet.getRange("E7:J7").format = {
+  fill: "#E8EEF7",
+  font: {name: "Arial", bold: true, color: "#1F2937"},
   horizontalAlignment: "center",
   verticalAlignment: "center",
   wrapText: true,
-  borders: {preset: "all", style: "thin", color: "#000000"},
+  borders: {preset: "outside", style: "thin", color: "#B8C2D1"},
 };
-sheet.getRange("A8:J9").format.rowHeight = 30;
+sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).format = {
+  fill: "#4472C4",
+  font: {name: "Arial", bold: true, color: "#FFFFFF"},
+  horizontalAlignment: "center",
+  verticalAlignment: "center",
+  wrapText: true,
+  borders: {preset: "all", style: "thin", color: "#FFFFFF"},
+};
+sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).format.rowHeight = 42;
+
+const dataRange = sheet.getRange(`A${contract.firstDataRow}:J${contract.tableEndRow}`);
+dataRange.format.verticalAlignment = "top";
+sheet.getRange(`A${contract.firstDataRow}:A${contract.tableEndRow}`).format.horizontalAlignment = "center";
+sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.horizontalAlignment = "center";
+sheet.getRange(`B${contract.firstDataRow}:C${contract.tableEndRow}`).format.wrapText = true;
+for (const column of ["E", "G", "I"]) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.###";
+for (const column of ["F", "H", "J"]) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.00";
+sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.numberFormat = "0";
 if (matrix.length) {
-  const dataRange = sheet.getRange(`A10:J${lastDataRow}`);
-  dataRange.format = {
-    fill: "#FFFFFF",
-    font: {color: "#000000"},
-    verticalAlignment: "top",
-    borders: {preset: "all", style: "thin", color: "#000000"},
-  };
-  sheet.getRange(`A10:A${lastDataRow}`).format.horizontalAlignment = "center";
-  sheet.getRange(`C10:C${lastDataRow}`).format.horizontalAlignment = "center";
-  sheet.getRange(`B10:B${lastDataRow}`).format.wrapText = true;
-  sheet.getRange(`D10:D${lastDataRow}`).format.wrapText = true;
-  for (const column of ["E", "G", "I"]) sheet.getRange(`${column}10:${column}${lastDataRow}`).format.numberFormat = "General";
-  for (const column of ["F", "H", "J"]) sheet.getRange(`${column}10:${column}${lastDataRow}`).format.numberFormat = "#,##0.00";
-  sheet.getRange(`C10:C${lastDataRow}`).format.numberFormat = "0";
   data.rows.forEach((row, index) => {
-    const supplierLines = Math.max(1, String(row.suppliers || "").split("\n").length);
     const categoryLines = Math.max(1, Math.ceil(String(row.category || "").length / 42));
-    const lines = Math.max(supplierLines, categoryLines);
-    sheet.getRange(`A${10 + index}:J${10 + index}`).format.rowHeight = Math.max(19, lines * 15);
+    const brandLines = Math.max(1, Math.ceil(String(row.brand || "").length / 20));
+    const lines = Math.max(categoryLines, brandLines);
+    sheet.getRange(`A${contract.firstDataRow + index}:J${contract.firstDataRow + index}`).format.rowHeight = Math.max(19, lines * 15);
   });
 }
 
-const widths = {A: 7, B: 38, C: 15, D: 48, E: 12, F: 16, G: 12, H: 16, I: 12, J: 16};
-for (const [column, width] of Object.entries(widths)) sheet.getRange(`${column}:${column}`).format.columnWidth = width;
+sheet.getRange(`A${contract.totalRow}:J${contract.totalRow}`).format = {
+  fill: "#D9E2F3",
+  font: {name: "Arial", bold: true, color: "#1F2937"},
+  borders: {preset: "all", style: "thin", color: "#9EADBF"},
+};
+sheet.getRange(`A${contract.totalRow}:D${contract.totalRow}`).format.horizontalAlignment = "right";
+for (const column of ["E", "G", "I"]) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.###";
+for (const column of ["F", "H", "J"]) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.00";
 
-let noteRow = lastDataRow + 2;
+const widths = {A: 7, B: 38, C: 20, D: 15, E: 17, F: 17, G: 17, H: 17, I: 17, J: 17};
+for (const [column, width] of Object.entries(widths)) sheet.getRange(`${column}:${column}`).format.columnWidth = width;
+sheet.freezePanes.freezeRows(contract.headerRow);
+
+let noteRow = contract.totalRow + 2;
 for (const note of data.notes) {
   sheet.mergeCells(`A${noteRow}:J${noteRow}`);
   sheet.getRange(`A${noteRow}`).values = [[note]];
@@ -1195,17 +1304,18 @@ def write_workbook(
         data_path = temp_root / "report_data.json"
         builder.write_text(textwrap.dedent(BUILDER_SOURCE), encoding="utf-8")
         payload = {
-            "from": start.isoformat(),
-            "to": end.isoformat(),
-            "fromDisplay": crm_date(start),
-            "toDisplay": crm_date(end),
+            "requestedStart": start.isoformat(),
+            "requestedEnd": end.isoformat(),
+            "loadedStart": start.isoformat(),
+            "loadedEnd": end.isoformat(),
+            "generatedAt": datetime.now().replace(microsecond=0).isoformat(),
             "filterText": applied_filter,
             "rows": [
                 {
                     "number": item["number"],
                     "category": item["category"],
+                    "brand": clean_text(item.get("brand") or ""),
                     "nmi_id": item["nmi_id"],
-                    "suppliers": item["suppliers"],
                     "opening_quantity": decimal_to_json(item["opening_quantity"]),
                     "opening_amount": decimal_to_json(item["opening_amount"]),
                     "intake_quantity": decimal_to_json(item["intake_quantity"]),
@@ -1216,6 +1326,9 @@ def write_workbook(
                 for item in rows
             ],
             "notes": notes,
+            "contract": workbook_contract_payload(
+                data_row_count=len(rows)
+            ),
             "outputPath": str(exported_workbook),
         }
         data_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -1260,14 +1373,44 @@ def column_index(cell_ref: str) -> int:
 def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_rows: int) -> dict[str, Any]:
     ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
     rel_ns = {"r": "http://schemas.openxmlformats.org/package/2006/relationships"}
+    try:
+        workbook_state = read_inventory_workbook_state(
+            output_path,
+            reference_date=end,
+        )
+    except WorkbookContractError as error:
+        raise ReportError(f"Проверка XLSX: {error}") from error
+
+    if (
+        workbook_state.requested_start != start
+        or workbook_state.requested_end != end
+    ):
+        raise ReportError(
+            "Проверка XLSX: requested period не совпал с периодом генерации."
+        )
+    if (
+        workbook_state.loaded_start != start
+        or workbook_state.loaded_end != end
+    ):
+        raise ReportError(
+            "Проверка XLSX: loaded period не совпал с периодом генерации."
+        )
+
     with zipfile.ZipFile(output_path) as archive:
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         sheets = workbook.find("m:sheets", ns)
-        if sheets is None or len(sheets) != 1:
-            raise ReportError("Проверка XLSX: ожидался ровно один лист.")
-        sheet_info = sheets[0]
-        if sheet_info.attrib.get("name") != "Отчет движения товара":
-            raise ReportError("Проверка XLSX: неверное имя листа.")
+        expected_sheet_names = [PARAMETERS_SHEET_NAME, REPORT_SHEET_NAME]
+        actual_sheet_names = (
+            [item.attrib.get("name", "") for item in sheets]
+            if sheets is not None
+            else []
+        )
+        if actual_sheet_names != expected_sheet_names:
+            raise ReportError(
+                "Проверка XLSX: неверные листы или их порядок: "
+                f"{actual_sheet_names!r}."
+            )
+        sheet_info = sheets[1]
         relationship_id = sheet_info.attrib.get(
             "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
         )
@@ -1296,12 +1439,18 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
             for item in shared_xml.findall("m:si", ns):
                 shared.append("".join(node.text or "" for node in item.findall(".//m:t", ns)))
 
-        cells: dict[str, tuple[str | None, str]] = {}
+        cells: dict[str, tuple[str | None, str, str]] = {}
         for cell in sheet_xml.findall(".//m:c", ns):
             ref = cell.attrib.get("r")
             if not ref:
                 continue
             cell_type = cell.attrib.get("t")
+            formula_node = cell.find("m:f", ns)
+            formula = (
+                formula_node.text
+                if formula_node is not None and formula_node.text is not None
+                else ""
+            )
             if cell_type == "inlineStr":
                 value = "".join(node.text or "" for node in cell.findall(".//m:t", ns))
             else:
@@ -1309,65 +1458,120 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
                 value = value_node.text if value_node is not None and value_node.text is not None else ""
                 if cell_type == "s" and value:
                     value = shared[int(value)]
-            cells[ref] = (cell_type, value)
+            cells[ref] = (cell_type, value, formula)
 
         def text_value(ref: str) -> str:
-            return cells.get(ref, (None, ""))[1]
+            return cells.get(ref, (None, "", ""))[1]
 
         if text_value("A1") != "Отчет движения товара":
             raise ReportError("Проверка XLSX: A1 не содержит заголовок.")
 
-        def verify_date(ref: str, expected: date) -> None:
-            cell_type, value = cells.get(ref, (None, ""))
+        def verify_real_date(ref: str, expected: date) -> None:
+            cell_type, value, _ = cells.get(ref, (None, "", ""))
             if cell_type in {"s", "str", "inlineStr"}:
-                if value != crm_date(expected):
+                raise ReportError(
+                    f"Проверка XLSX: {ref} должна быть настоящей датой Excel."
+                )
+            if cell_type == "d":
+                try:
+                    actual = datetime.fromisoformat(
+                        value.replace("Z", "+00:00")
+                    ).date()
+                except ValueError as error:
                     raise ReportError(
-                        f"Проверка XLSX: {ref}={value!r}, ожидалось {crm_date(expected)!r}."
-                    )
-                return
+                        f"Проверка XLSX: {ref} не содержит корректную дату."
+                    ) from error
+            else:
+                try:
+                    actual = (
+                        datetime(1899, 12, 30)
+                        + timedelta(days=float(value))
+                    ).date()
+                except (TypeError, ValueError) as error:
+                    raise ReportError(
+                        f"Проверка XLSX: {ref} не содержит корректную дату."
+                    ) from error
             try:
-                actual = (datetime(1899, 12, 30) + timedelta(days=float(value))).date()
-            except (TypeError, ValueError) as error:
-                raise ReportError(f"Проверка XLSX: {ref} не содержит корректную дату.") from error
+                expected_value = expected.isoformat()
+            except AttributeError as error:
+                raise ReportError("Проверка XLSX: ожидалась дата.") from error
             if actual != expected:
-                raise ReportError(f"Проверка XLSX: {ref}={actual}, ожидалось {expected}.")
+                raise ReportError(
+                    f"Проверка XLSX: {ref}={actual}, ожидалось {expected_value}."
+                )
 
-        verify_date("C3", start)
-        verify_date("E3", end)
+        verify_real_date(REPORT_LOADED_START_CELL, start)
+        verify_real_date(REPORT_LOADED_END_CELL, end)
 
         merged = {
             item.attrib["ref"] for item in sheet_xml.findall(".//m:mergeCells/m:mergeCell", ns)
         }
-        required_merges = {"A8:A9", "B8:B9", "C8:C9", "D8:D9", "E8:F8", "G8:H8", "I8:J8"}
+        required_merges = {
+            "A1:J1",
+            "A3:B3",
+            "E7:F7",
+            "G7:H7",
+            "I7:J7",
+        }
         if not required_merges.issubset(merged):
             raise ReportError(f"Проверка XLSX: отсутствуют merged ranges {sorted(required_merges - merged)}")
 
-        expected_headers = {
-            "A8": "№ п.п.",
-            "B8": "Категория ИТ",
-            "C8": "Артикул в ИТ",
-            "D8": "Артикул поставщика",
-            "E8": "Остаток на начало",
-            "G8": "Приход",
-            "I8": "Остаток на конец",
-            "E9": "кв-во",
-            "F9": "сумма",
-            "G9": "кв-во",
-            "H9": "сумма",
-            "I9": "кв-во",
-            "J9": "сумма",
-        }
-        for ref, expected in expected_headers.items():
+        for index, expected in enumerate(REPORT_HEADERS):
+            ref = f"{chr(ord('A') + index)}{REPORT_HEADER_ROW}"
             if text_value(ref) != expected:
                 raise ReportError(f"Проверка XLSX: {ref}={text_value(ref)!r}, ожидалось {expected!r}.")
+        if any("поставщик" in header.casefold() for header in REPORT_HEADERS):
+            raise ReportError(
+                "Проверка XLSX: колонка артикула поставщика не удалена."
+            )
+
+        table_parts = sheet_xml.findall(".//m:tableParts/m:tablePart", ns)
+        if len(table_parts) != 1:
+            raise ReportError("Проверка XLSX: ожидалась ровно одна native Table.")
+
+        table_paths = [
+            item
+            for item in archive.namelist()
+            if re.fullmatch(r"xl/tables/table\d+\.xml", item)
+        ]
+        if len(table_paths) != 1:
+            raise ReportError("Проверка XLSX: не найден XML native Table.")
+        table_xml = ET.fromstring(archive.read(table_paths[0]))
+        expected_table_ref = (
+            f"A{REPORT_HEADER_ROW}:J{table_end_row(expected_rows)}"
+        )
+        if table_xml.attrib.get("name") != REPORT_TABLE_NAME:
+            raise ReportError("Проверка XLSX: неверное имя native Table.")
+        if table_xml.attrib.get("ref") != expected_table_ref:
+            raise ReportError(
+                "Проверка XLSX: неверный диапазон native Table: "
+                f"{table_xml.attrib.get('ref')!r}."
+            )
+        auto_filter = table_xml.find("m:autoFilter", ns)
+        if auto_filter is None or auto_filter.attrib.get("ref") != expected_table_ref:
+            raise ReportError("Проверка XLSX: native AutoFilter отсутствует.")
+        table_columns = [
+            item.attrib.get("name", "")
+            for item in table_xml.findall(".//m:tableColumns/m:tableColumn", ns)
+        ]
+        if table_columns != list(REPORT_HEADERS):
+            raise ReportError(
+                "Проверка XLSX: заголовки native Table не совпали с контрактом."
+            )
 
         data_rows = 0
-        for row_number in range(10, 10 + expected_rows):
+        for row_number in range(
+            REPORT_FIRST_DATA_ROW,
+            REPORT_FIRST_DATA_ROW + expected_rows,
+        ):
             if text_value(f"A{row_number}") == "":
                 raise ReportError(f"Проверка XLSX: отсутствует строка данных {row_number}.")
             data_rows += 1
-            for column in ("A", "C", "E", "F", "G", "H", "I", "J"):
-                cell_type, value = cells.get(f"{column}{row_number}", (None, ""))
+            for column in ("A", "D", "E", "F", "G", "H", "I", "J"):
+                cell_type, value, _ = cells.get(
+                    f"{column}{row_number}",
+                    (None, "", ""),
+                )
                 if cell_type in {"s", "str", "inlineStr"} or value == "":
                     raise ReportError(
                         f"Проверка XLSX: {column}{row_number} должно быть числовым полем."
@@ -1380,11 +1584,41 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
                     ) from error
         if data_rows != expected_rows:
             raise ReportError("Проверка XLSX: число строк данных не совпало с universe.")
+
+        expected_total_row = total_row(expected_rows)
+        if text_value(f"A{expected_total_row}") != "ИТОГО":
+            raise ReportError("Проверка XLSX: отсутствует строка ИТОГО.")
+        expected_formulas = subtotal_formulas(expected_rows)
+        actual_formulas: dict[str, str] = {}
+        for column in TOTAL_COLUMNS:
+            _, _, formula = cells.get(
+                f"{column}{expected_total_row}",
+                (None, "", ""),
+            )
+            expected_formula = expected_formulas[column].lstrip("=")
+            if formula.upper() != expected_formula.upper():
+                raise ReportError(
+                    "Проверка XLSX: неверная формула итога в "
+                    f"{column}{expected_total_row}: {formula!r}."
+                )
+            actual_formulas[column] = f"={formula}"
+
         return {
-            "sheet": sheet_info.attrib["name"],
+            "sheet": REPORT_SHEET_NAME,
+            "sheets": actual_sheet_names,
             "merged": sorted(required_merges),
             "data_rows": data_rows,
             "numeric_fields": True,
+            "requested_dates_are_excel_dates": True,
+            "requested_start": workbook_state.requested_start,
+            "requested_end": workbook_state.requested_end,
+            "loaded_start": workbook_state.loaded_start,
+            "loaded_end": workbook_state.loaded_end,
+            "native_table": REPORT_TABLE_NAME,
+            "auto_filter": expected_table_ref,
+            "headers": list(REPORT_HEADERS),
+            "total_row": expected_total_row,
+            "total_formulas": actual_formulas,
         }
 
 
@@ -1504,13 +1738,7 @@ def generate_inventory_movement_report(
     if (brand or category) and not rows:
         raise ReportError("После применения фактических CRM-фильтров не осталось товаров.")
 
-    notes = [
-        "Для товаров с несколькими поставщиками в колонке «Артикул поставщика» перечислены все доступные пары «поставщик — артикул»."
-    ]
-    if any(item["has_supplier_restrictions"] for item in rows):
-        notes.append(
-            "Ограничения supplier SKU по cities[]/filials[] не применялись: их семантика в CRM неоднозначна, поэтому связи не отбрасывались молча."
-        )
+    notes = []
     if end == date.today():
         notes.append("Остаток на конец текущего дня указан на момент формирования отчёта.")
 
@@ -1525,7 +1753,7 @@ def generate_inventory_movement_report(
     verification = reopen_and_verify_xlsx(output, start, end, len(rows))
     print("\nПроверка созданного XLSX через Python:")
     print(f"  Лист: {verification['sheet']}")
-    print("  A1, даты, merged ranges и A8:J9: корректны")
+    print("  Параметры, даты, native Table, AutoFilter и итоги: корректны")
     print(f"  Строк данных: {verification['data_rows']}")
     print("  Количества, суммы и Артикул ИТ: числовые")
     print(f"\nГотовый файл: {output}")
