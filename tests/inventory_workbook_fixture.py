@@ -15,8 +15,10 @@ from inventory_workbook_contract import (
     REPORT_FIRST_DATA_ROW,
     REPORT_HEADERS,
     REPORT_HEADER_ROW,
+    REPORT_LAST_COLUMN,
     REPORT_LOADED_END_CELL,
     REPORT_LOADED_START_CELL,
+    REPORT_REQUIRED_MERGES,
     REPORT_SHEET_NAME,
     REPORT_TABLE_NAME,
     REQUESTED_END_CELL,
@@ -58,6 +60,7 @@ def default_rows(count: int) -> list[dict[str, object]]:
             "category": f"Категория {index + 1}",
             "brand": "Тестовый бренд" if index % 2 == 0 else "",
             "nmi_id": 900000 + index,
+            "nomenclature_name": f"Синтетический товар {index + 1}",
             "opening_quantity": index + 1,
             "opening_amount": (index + 1) * 100.25,
             "intake_quantity": index + 2,
@@ -110,6 +113,7 @@ def write_inventory_workbook_fixture(
             item["category"],
             item["brand"],
             item["nmi_id"],
+            item["nomenclature_name"],
             item["opening_quantity"],
             item["opening_amount"],
             item["intake_quantity"],
@@ -131,12 +135,12 @@ def write_inventory_workbook_fixture(
             float(
                 item[
                     {
-                        "E": "opening_quantity",
-                        "F": "opening_amount",
-                        "G": "intake_quantity",
-                        "H": "intake_amount",
-                        "I": "ending_quantity",
-                        "J": "ending_amount",
+                        "F": "opening_quantity",
+                        "G": "opening_amount",
+                        "H": "intake_quantity",
+                        "I": "intake_amount",
+                        "J": "ending_quantity",
+                        "K": "ending_amount",
                     }[column]
                 ]
             )
@@ -168,6 +172,10 @@ def write_inventory_workbook_fixture(
   <sheetData><row>{parameter_cells}</row></sheetData>
 </worksheet>
 '''
+    merge_cells_xml = "".join(
+        f'<mergeCell ref="{range_ref}"/>'
+        for range_ref in REPORT_REQUIRED_MERGES
+    )
     report_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -178,11 +186,7 @@ def write_inventory_workbook_fixture(
     {''.join(f'<row>{item}</row>' for item in data_cells)}
     <row>{''.join(total_cells)}</row>
   </sheetData>
-  <mergeCells count="5">
-    <mergeCell ref="A1:J1"/><mergeCell ref="A3:B3"/>
-    <mergeCell ref="E7:F7"/>
-    <mergeCell ref="G7:H7"/><mergeCell ref="I7:J7"/>
-  </mergeCells>
+  <mergeCells count="{len(REPORT_REQUIRED_MERGES)}">{merge_cells_xml}</mergeCells>
   <tableParts count="1"><tablePart r:id="rId1"/></tableParts>
 </worksheet>
 '''
@@ -195,13 +199,13 @@ def write_inventory_workbook_fixture(
         f'<tableColumn id="{index + 1}" name="{escape(header)}"/>'
         for index, header in enumerate(REPORT_HEADERS)
     )
-    table_ref = f"A{REPORT_HEADER_ROW}:J{table_last_row}"
+    table_ref = f"A{REPORT_HEADER_ROW}:{REPORT_LAST_COLUMN}{table_last_row}"
     table_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
  id="1" name="{REPORT_TABLE_NAME}" displayName="{REPORT_TABLE_NAME}"
  ref="{table_ref}" totalsRowShown="0">
   <autoFilter ref="{table_ref}"/>
-  <tableColumns count="10">{table_columns}</tableColumns>
+  <tableColumns count="{len(REPORT_HEADERS)}">{table_columns}</tableColumns>
 </table>
 '''
     styles_xml = '''<?xml version="1.0" encoding="UTF-8"?>

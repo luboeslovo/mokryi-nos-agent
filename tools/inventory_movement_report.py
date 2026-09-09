@@ -28,12 +28,15 @@ from xml.etree import ElementTree as ET
 from playwright.async_api import BrowserContext, Error as PlaywrightError, Page, async_playwright
 
 from inventory_workbook_contract import (
+    NUMERIC_COLUMNS,
     PARAMETERS_SHEET_NAME,
     REPORT_FIRST_DATA_ROW,
     REPORT_HEADERS,
     REPORT_HEADER_ROW,
+    REPORT_LAST_COLUMN,
     REPORT_LOADED_END_CELL,
     REPORT_LOADED_START_CELL,
+    REPORT_REQUIRED_MERGES,
     REPORT_SHEET_NAME,
     REPORT_TABLE_NAME,
     TOTAL_COLUMNS,
@@ -108,6 +111,7 @@ class ProductMeta:
     nmi_ids: set[int]
     parent_id: int
     parent_name: str
+    nomenclature_name: str
     brand: str
     suppliers: list[str]
     has_supplier_restrictions: bool = False
@@ -266,6 +270,7 @@ class ProductCardParser(HTMLParser):
         self.nmi_ids: set[int] = set()
         self.parent_id: int | None = None
         self.parent_name = ""
+        self.nomenclature_name = ""
         self.brand = ""
         self.providers: dict[int, dict[str, Any]] = defaultdict(
             lambda: {"provider": "", "articul": "", "cities": [], "filials": []}
@@ -337,6 +342,9 @@ class ProductCardParser(HTMLParser):
     def _record_input(self, attrs: dict[str, str]) -> None:
         name = attrs.get("name", "")
         value = attrs.get("value", "")
+        if name == "Nomenclature[name]":
+            self.nomenclature_name = clean_text(value)
+            return
         nmi_match = NMI_ID_RE.match(name)
         if nmi_match and value.isdigit():
             self.nmi_ids.add(int(value))
@@ -718,6 +726,8 @@ def parse_product_card(body: str, nomenclature_id: int) -> ProductMeta:
         raise ReportError(f"Карточка номенклатуры {nomenclature_id} не содержит NMI ID.")
     if parser.parent_id is None or not parser.parent_name:
         raise ReportError(f"Карточка номенклатуры {nomenclature_id} не содержит подтверждённую иерархию.")
+    if not parser.nomenclature_name:
+        raise ReportError(f"Карточка номенклатуры {nomenclature_id} не содержит поля Nomenclature[name].")
     if not parser.brand:
         raise ReportError(f"Карточка номенклатуры {nomenclature_id} не содержит фактический бренд CRM.")
     pairs: set[str] = set()
@@ -735,6 +745,7 @@ def parse_product_card(body: str, nomenclature_id: int) -> ProductMeta:
         nmi_ids=parser.nmi_ids,
         parent_id=parser.parent_id,
         parent_name=parser.parent_name,
+        nomenclature_name=parser.nomenclature_name,
         brand=parser.brand,
         suppliers=sorted(pairs, key=str.casefold),
         has_supplier_restrictions=has_restrictions,
@@ -1023,6 +1034,7 @@ def build_rows(
                 "number": number,
                 "category": item.category,
                 "nmi_id": nmi_id,
+                "nomenclature_name": item.nomenclature_name,
                 "suppliers": "\n".join(item.suppliers),
                 "opening_quantity": opening_value.quantity,
                 "opening_amount": opening_value.amount,
@@ -1136,7 +1148,7 @@ parameters.getRange("A:A").format.columnWidth = 34;
 parameters.getRange("B:B").format.columnWidth = 20;
 parameters.getRange("C:D").format.columnWidth = 12;
 
-sheet.mergeCells("A1:J1");
+sheet.mergeCells(`A1:${contract.lastColumn}1`);
 sheet.mergeCells("A3:B3");
 sheet.getRange("A1").values = [["Отчет движения товара"]];
 sheet.getRange("A3").values = [["Фактический период"]];
@@ -1145,19 +1157,18 @@ sheet.getRange("D3").values = [["—"]];
 sheet.getRange(contract.reportLoadedEndCell).values = [[localDate(data.loadedEnd)]];
 sheet.getRange("A5").values = [["Фильтр при формировании"]];
 sheet.getRange("C5").values = [[data.filterText]];
-sheet.getRange("E7:F7").merge();
-sheet.getRange("G7:H7").merge();
-sheet.getRange("I7:J7").merge();
-sheet.getRange("E7").values = [["Остаток на начало"]];
-sheet.getRange("G7").values = [["Приход"]];
-sheet.getRange("I7").values = [["Остаток на конец"]];
-sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).values = [contract.headers];
+for (const group of contract.groupHeaders) {
+  sheet.mergeCells(group.range);
+  sheet.getRange(group.cell).values = [[group.label]];
+}
+sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).values = [contract.headers];
 
 const matrix = data.rows.map(row => [
   row.number,
   row.category,
   row.brand,
   row.nmi_id,
+  row.nomenclature_name,
   row.opening_quantity,
   row.opening_amount,
   row.intake_quantity,
@@ -1166,13 +1177,13 @@ const matrix = data.rows.map(row => [
   row.ending_amount,
 ]);
 if (matrix.length) {
-  sheet.getRange(`A${contract.firstDataRow}:J${contract.tableEndRow}`).values = matrix;
+  sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.tableEndRow}`).values = matrix;
 } else {
-  sheet.getRange(`A${contract.firstDataRow}:J${contract.firstDataRow}`).values = [[null, null, null, null, null, null, null, null, null, null]];
+  sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.firstDataRow}`).values = [contract.headers.map(() => null)];
 }
 
 const inventoryTable = sheet.tables.add(
-  `A${contract.headerRow}:J${contract.tableEndRow}`,
+  `A${contract.headerRow}:${contract.lastColumn}${contract.tableEndRow}`,
   true,
   contract.tableName,
 );
@@ -1180,21 +1191,23 @@ inventoryTable.style = "TableStyleMedium2";
 inventoryTable.showFilterButton = true;
 inventoryTable.showTotals = false;
 
-sheet.getRange(`A${contract.totalRow}:D${contract.totalRow}`).values = [["ИТОГО", "", "", ""]];
-sheet.getRange(`E${contract.totalRow}:J${contract.totalRow}`).formulas = [[
+const totalLabelCells = Array(contract.headers.length - contract.totalColumns.length).fill("");
+totalLabelCells[0] = "ИТОГО";
+sheet.getRange(`A${contract.totalRow}:${contract.totalLabelEndColumn}${contract.totalRow}`).values = [totalLabelCells];
+sheet.getRange(`${contract.totalColumns[0]}${contract.totalRow}:${contract.lastColumn}${contract.totalRow}`).formulas = [[
   ...contract.totalColumns.map(column => contract.totalFormulas[column]),
 ]];
 
 const usedEnd = contract.totalRow;
-sheet.getRange(`A1:J${usedEnd}`).format.fill = "#FFFFFF";
-sheet.getRange(`A1:J${usedEnd}`).format.font = {name: "Arial", color: "#1F2937", size: 11};
+sheet.getRange(`A1:${contract.lastColumn}${usedEnd}`).format.fill = "#FFFFFF";
+sheet.getRange(`A1:${contract.lastColumn}${usedEnd}`).format.font = {name: "Arial", color: "#1F2937", size: 11};
 sheet.getRange("A1").format.font = {name: "Arial", bold: true, color: "#1F2937", size: 18};
 sheet.getRange("A3:E3").format.verticalAlignment = "center";
 sheet.getRange("A3").format.font = {name: "Arial", bold: true, color: "#1F2937"};
 sheet.getRange("C3").setNumberFormat(contract.dateNumberFormat);
 sheet.getRange("E3").setNumberFormat(contract.dateNumberFormat);
 sheet.getRange("A5").format.font = {name: "Arial", bold: true, color: "#1F2937"};
-sheet.getRange("E7:J7").format = {
+sheet.getRange(`${contract.totalColumns[0]}7:${contract.lastColumn}7`).format = {
   fill: "#E8EEF7",
   font: {name: "Arial", bold: true, color: "#1F2937"},
   horizontalAlignment: "center",
@@ -1202,7 +1215,7 @@ sheet.getRange("E7:J7").format = {
   wrapText: true,
   borders: {preset: "outside", style: "thin", color: "#B8C2D1"},
 };
-sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).format = {
+sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).format = {
   fill: "#4472C4",
   font: {name: "Arial", bold: true, color: "#FFFFFF"},
   horizontalAlignment: "center",
@@ -1210,49 +1223,50 @@ sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).format = {
   wrapText: true,
   borders: {preset: "all", style: "thin", color: "#FFFFFF"},
 };
-sheet.getRange(`A${contract.headerRow}:J${contract.headerRow}`).format.rowHeight = 42;
+sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).format.rowHeight = 42;
 
-const dataRange = sheet.getRange(`A${contract.firstDataRow}:J${contract.tableEndRow}`);
+const dataRange = sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.tableEndRow}`);
 dataRange.format.verticalAlignment = "top";
 sheet.getRange(`A${contract.firstDataRow}:A${contract.tableEndRow}`).format.horizontalAlignment = "center";
 sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.horizontalAlignment = "center";
-sheet.getRange(`B${contract.firstDataRow}:C${contract.tableEndRow}`).format.wrapText = true;
-for (const column of ["E", "G", "I"]) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.###";
-for (const column of ["F", "H", "J"]) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.00";
+for (const column of contract.wrappedTextColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.wrapText = true;
+for (const column of contract.quantityColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.###";
+for (const column of contract.amountColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.00";
 sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.numberFormat = "0";
 if (matrix.length) {
   data.rows.forEach((row, index) => {
     const categoryLines = Math.max(1, Math.ceil(String(row.category || "").length / 42));
     const brandLines = Math.max(1, Math.ceil(String(row.brand || "").length / 20));
-    const lines = Math.max(categoryLines, brandLines);
-    sheet.getRange(`A${contract.firstDataRow + index}:J${contract.firstDataRow + index}`).format.rowHeight = Math.max(19, lines * 15);
+    const nomenclatureLines = Math.max(1, Math.ceil(String(row.nomenclature_name || "").length / 46));
+    const lines = Math.max(categoryLines, brandLines, nomenclatureLines);
+    sheet.getRange(`A${contract.firstDataRow + index}:${contract.lastColumn}${contract.firstDataRow + index}`).format.rowHeight = Math.max(19, lines * 15);
   });
 }
 
-sheet.getRange(`A${contract.totalRow}:J${contract.totalRow}`).format = {
+sheet.getRange(`A${contract.totalRow}:${contract.lastColumn}${contract.totalRow}`).format = {
   fill: "#D9E2F3",
   font: {name: "Arial", bold: true, color: "#1F2937"},
   borders: {preset: "all", style: "thin", color: "#9EADBF"},
 };
-sheet.getRange(`A${contract.totalRow}:D${contract.totalRow}`).format.horizontalAlignment = "right";
-for (const column of ["E", "G", "I"]) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.###";
-for (const column of ["F", "H", "J"]) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.00";
+sheet.getRange(`A${contract.totalRow}:${contract.totalLabelEndColumn}${contract.totalRow}`).format.horizontalAlignment = "right";
+for (const column of contract.quantityColumns) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.###";
+for (const column of contract.amountColumns) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.00";
 
-const widths = {A: 7, B: 38, C: 20, D: 15, E: 17, F: 17, G: 17, H: 17, I: 17, J: 17};
+const widths = {A: 7, B: 34, C: 20, D: 15, E: 42, F: 17, G: 17, H: 17, I: 17, J: 17, K: 17};
 for (const [column, width] of Object.entries(widths)) sheet.getRange(`${column}:${column}`).format.columnWidth = width;
 sheet.freezePanes.freezeRows(contract.headerRow);
 
 let noteRow = contract.totalRow + 2;
 for (const note of data.notes) {
-  sheet.mergeCells(`A${noteRow}:J${noteRow}`);
+  sheet.mergeCells(`A${noteRow}:${contract.lastColumn}${noteRow}`);
   sheet.getRange(`A${noteRow}`).values = [[note]];
-  sheet.getRange(`A${noteRow}:J${noteRow}`).format = {
+  sheet.getRange(`A${noteRow}:${contract.lastColumn}${noteRow}`).format = {
     fill: "#FFFFFF",
     font: {color: "#000000", italic: true},
     wrapText: true,
     verticalAlignment: "top",
   };
-  sheet.getRange(`A${noteRow}:J${noteRow}`).format.rowHeight = 30;
+  sheet.getRange(`A${noteRow}:${contract.lastColumn}${noteRow}`).format.rowHeight = 30;
   noteRow += 1;
 }
 
@@ -1316,6 +1330,7 @@ def write_workbook(
                     "category": item["category"],
                     "brand": clean_text(item.get("brand") or ""),
                     "nmi_id": item["nmi_id"],
+                    "nomenclature_name": clean_text(item["nomenclature_name"]),
                     "opening_quantity": decimal_to_json(item["opening_quantity"]),
                     "opening_amount": decimal_to_json(item["opening_amount"]),
                     "intake_quantity": decimal_to_json(item["intake_quantity"]),
@@ -1506,13 +1521,7 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
         merged = {
             item.attrib["ref"] for item in sheet_xml.findall(".//m:mergeCells/m:mergeCell", ns)
         }
-        required_merges = {
-            "A1:J1",
-            "A3:B3",
-            "E7:F7",
-            "G7:H7",
-            "I7:J7",
-        }
+        required_merges = set(REPORT_REQUIRED_MERGES)
         if not required_merges.issubset(merged):
             raise ReportError(f"Проверка XLSX: отсутствуют merged ranges {sorted(required_merges - merged)}")
 
@@ -1538,7 +1547,8 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
             raise ReportError("Проверка XLSX: не найден XML native Table.")
         table_xml = ET.fromstring(archive.read(table_paths[0]))
         expected_table_ref = (
-            f"A{REPORT_HEADER_ROW}:J{table_end_row(expected_rows)}"
+            f"A{REPORT_HEADER_ROW}:{REPORT_LAST_COLUMN}"
+            f"{table_end_row(expected_rows)}"
         )
         if table_xml.attrib.get("name") != REPORT_TABLE_NAME:
             raise ReportError("Проверка XLSX: неверное имя native Table.")
@@ -1567,7 +1577,18 @@ def reopen_and_verify_xlsx(output_path: Path, start: date, end: date, expected_r
             if text_value(f"A{row_number}") == "":
                 raise ReportError(f"Проверка XLSX: отсутствует строка данных {row_number}.")
             data_rows += 1
-            for column in ("A", "D", "E", "F", "G", "H", "I", "J"):
+            cell_type, nomenclature_name, _ = cells.get(
+                f"E{row_number}",
+                (None, "", ""),
+            )
+            if (
+                cell_type not in {"s", "str", "inlineStr"}
+                or not clean_text(nomenclature_name)
+            ):
+                raise ReportError(
+                    f"Проверка XLSX: E{row_number} должно содержать название номенклатуры."
+                )
+            for column in NUMERIC_COLUMNS:
                 cell_type, value, _ = cells.get(
                     f"{column}{row_number}",
                     (None, "", ""),

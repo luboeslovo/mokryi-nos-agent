@@ -27,12 +27,15 @@ REPORT_LOADED_END_CELL = "E3"
 REPORT_HEADER_ROW = 8
 REPORT_FIRST_DATA_ROW = REPORT_HEADER_ROW + 1
 REPORT_TABLE_NAME = "InventoryMovementTable"
+REPORT_LAST_COLUMN = "K"
+REPORT_TOTAL_LABEL_END_COLUMN = "E"
 
 REPORT_HEADERS = (
     "№",
     "Категория",
     "Бренд",
     "Артикул ИТ",
+    "Название номенклатуры",
     "Остаток на начало, количество",
     "Остаток на начало, сумма",
     "Приход, количество",
@@ -41,7 +44,21 @@ REPORT_HEADERS = (
     "Остаток на конец, сумма",
 )
 
-TOTAL_COLUMNS = ("E", "F", "G", "H", "I", "J")
+REPORT_GROUP_HEADERS = (
+    ("F7:G7", "F7", "Остаток на начало"),
+    ("H7:I7", "H7", "Приход"),
+    ("J7:K7", "J7", "Остаток на конец"),
+)
+REPORT_REQUIRED_MERGES = (
+    f"A1:{REPORT_LAST_COLUMN}1",
+    "A3:B3",
+    *(item[0] for item in REPORT_GROUP_HEADERS),
+)
+TOTAL_COLUMNS = ("F", "G", "H", "I", "J", "K")
+QUANTITY_COLUMNS = ("F", "H", "J")
+AMOUNT_COLUMNS = ("G", "I", "K")
+NUMERIC_COLUMNS = ("A", "D", *TOTAL_COLUMNS)
+WRAPPED_TEXT_COLUMNS = ("B", "C", "E")
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL_NS = (
@@ -372,7 +389,16 @@ def workbook_contract_payload(
         "tableEndRow": table_end_row(data_row_count),
         "totalRow": total_row(data_row_count),
         "tableName": REPORT_TABLE_NAME,
+        "lastColumn": REPORT_LAST_COLUMN,
+        "totalLabelEndColumn": REPORT_TOTAL_LABEL_END_COLUMN,
         "headers": list(REPORT_HEADERS),
+        "groupHeaders": [
+            {"range": range_ref, "cell": cell_ref, "label": label}
+            for range_ref, cell_ref, label in REPORT_GROUP_HEADERS
+        ],
         "totalColumns": list(TOTAL_COLUMNS),
+        "quantityColumns": list(QUANTITY_COLUMNS),
+        "amountColumns": list(AMOUNT_COLUMNS),
+        "wrappedTextColumns": list(WRAPPED_TEXT_COLUMNS),
         "totalFormulas": subtotal_formulas(data_row_count),
     }

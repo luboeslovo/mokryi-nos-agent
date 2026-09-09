@@ -16,6 +16,7 @@ from inventory_workbook_contract import (
     REPORT_HEADERS,
     REPORT_SHEET_NAME,
     REPORT_TABLE_NAME,
+    TOTAL_COLUMNS,
     WorkbookContractError,
     read_inventory_workbook_state,
     subtotal_formulas,
@@ -37,6 +38,7 @@ class InventoryWorkbookContractTests(unittest.TestCase):
                 "Категория",
                 "Бренд",
                 "Артикул ИТ",
+                "Название номенклатуры",
                 "Остаток на начало, количество",
                 "Остаток на начало, сумма",
                 "Приход, количество",
@@ -45,6 +47,7 @@ class InventoryWorkbookContractTests(unittest.TestCase):
                 "Остаток на конец, сумма",
             ),
         )
+        self.assertEqual(len(REPORT_HEADERS), 11)
         self.assertFalse(
             any("поставщик" in value.casefold() for value in REPORT_HEADERS)
         )
@@ -127,21 +130,23 @@ class InventoryWorkbookContractTests(unittest.TestCase):
 
     def test_subtotal_ranges_cover_data_only_for_empty_one_and_many(self):
         expectations = {
-            0: (9, 10, "=SUBTOTAL(109,E9:E9)"),
-            1: (9, 10, "=SUBTOTAL(109,E9:E9)"),
-            3: (11, 12, "=SUBTOTAL(109,E9:E11)"),
+            0: (9, 10, "=SUBTOTAL(109,F9:F9)"),
+            1: (9, 10, "=SUBTOTAL(109,F9:F9)"),
+            3: (11, 12, "=SUBTOTAL(109,F9:F11)"),
         }
         for row_count, expected in expectations.items():
             with self.subTest(row_count=row_count):
                 formulas = subtotal_formulas(row_count)
                 self.assertEqual(table_end_row(row_count), expected[0])
                 self.assertEqual(total_row(row_count), expected[1])
-                self.assertEqual(formulas["E"], expected[2])
-                for formula in formulas.values():
-                    self.assertNotIn(
-                        f":E{total_row(row_count)})",
+                self.assertEqual(formulas["F"], expected[2])
+                self.assertEqual(tuple(formulas), TOTAL_COLUMNS)
+                for column, formula in formulas.items():
+                    self.assertEqual(
                         formula,
+                        f"=SUBTOTAL(109,{column}9:{column}{expected[0]})",
                     )
+                    self.assertNotIn(f"{column}{expected[1]})", formula)
 
     def test_verification_accepts_native_table_and_totals_for_row_counts(self):
         for row_count in (0, 1, 3):
@@ -167,18 +172,55 @@ class InventoryWorkbookContractTests(unittest.TestCase):
                     verification["native_table"],
                     REPORT_TABLE_NAME,
                 )
+                self.assertEqual(
+                    verification["auto_filter"],
+                    f"A8:K{table_end_row(row_count)}",
+                )
+                self.assertEqual(
+                    tuple(verification["total_formulas"]),
+                    TOTAL_COLUMNS,
+                )
                 self.assertEqual(verification["data_rows"], row_count)
                 self.assertEqual(
                     verification["total_row"],
                     total_row(row_count),
                 )
 
-    def test_build_rows_preserves_exact_and_empty_brand(self):
+    def test_build_rows_preserves_crm_name_and_exact_or_empty_brand(self):
         collected = self.synthetic_collected()
         rows = report.build_rows(collected, None, None)
 
         self.assertEqual([item["brand"] for item in rows], ["", "Exact Brand"])
         self.assertNotIn("Неизвестный бренд", [item["brand"] for item in rows])
+        self.assertEqual(
+            [item["nomenclature_name"] for item in rows],
+            ["Игрушка-мышь", "Корм для кошек, 400 г"],
+        )
+        for item in rows:
+            self.assertNotEqual(item["nomenclature_name"], item["brand"])
+            self.assertNotEqual(item["nomenclature_name"], str(item["nmi_id"]))
+
+    def test_product_card_name_comes_from_nomenclature_name_field(self):
+        metadata = report.parse_product_card(
+            '''
+            <input name="Nomenclature[name]" value="Корм полнорационный, 400 г">
+            <input name="NomenclatureMeasureItem[0][id]" value="101">
+            <select name="Nomenclature[parent_id]">
+              <option value="1" selected>Корма</option>
+            </select>
+            <div class="form-group">
+              <label>Бренд</label>
+              <select name="Nomenclature[brand_id]">
+                <option value="7" selected>Точный бренд</option>
+              </select>
+            </div>
+            ''',
+            1001,
+        )
+
+        self.assertEqual(metadata.nomenclature_name, "Корм полнорационный, 400 г")
+        self.assertNotEqual(metadata.nomenclature_name, metadata.brand)
+        self.assertNotEqual(metadata.nomenclature_name, str(next(iter(metadata.nmi_ids))))
 
     def test_python_controls_keep_existing_business_totals(self):
         collected = self.synthetic_collected()
@@ -236,6 +278,7 @@ class InventoryWorkbookContractTests(unittest.TestCase):
                 nmi_ids={101},
                 parent_id=1,
                 parent_name="Категория",
+                nomenclature_name="Корм для кошек, 400 г",
                 brand="Exact Brand",
                 suppliers=["Поставщик — SKU"],
                 category="B / Категория",
@@ -245,6 +288,7 @@ class InventoryWorkbookContractTests(unittest.TestCase):
                 nmi_ids={102},
                 parent_id=1,
                 parent_name="Категория",
+                nomenclature_name="Игрушка-мышь",
                 brand="",
                 suppliers=[],
                 category="A / Категория",
