@@ -1,0 +1,5 @@
+# Runtime-only Python dependencies for the inventory workbook updater.
+playwright==1.62.0
+keyring==25.7.0
+openpyxl==3.1.5
+tzdata==2026.2
