@@ -6,14 +6,9 @@ import argparse
 import asyncio
 import html
 import json
-import os
 import re
-import shutil
-import stat
 import subprocess
 import sys
-import tempfile
-import textwrap
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -45,8 +40,8 @@ from inventory_workbook_contract import (
     subtotal_formulas,
     table_end_row,
     total_row,
-    workbook_contract_payload,
 )
+from inventory_workbook_writer import write_inventory_workbook
 
 
 BASE_URL = "https://it.mokryinos.ru/"
@@ -63,20 +58,6 @@ SHOP_ID = "1181"
 MAIN_STORE_ID = "1667"
 MAIN_STORE_NAME = "Склад Ф_Наташи Ковшовой, д. 8 к.1"
 MAIN_STORE_TYPE_ID = "1"
-
-NODE_EXE_ENV = "CODEX_ARTIFACT_NODE"
-NODE_MODULES_ENV = "CODEX_ARTIFACT_NODE_MODULES"
-DEFAULT_NODE_EXE = (
-    Path.home()
-    / ".cache"
-    / "codex-runtimes"
-    / "codex-primary-runtime"
-    / "dependencies"
-    / "node"
-    / "bin"
-    / "node.exe"
-)
-DEFAULT_NODE_MODULES = DEFAULT_NODE_EXE.parents[1] / "node_modules"
 
 ZERO = Decimal("0")
 PROCUREMENT_TOTAL_TOLERANCE = Decimal("0.01")
@@ -1058,247 +1039,6 @@ def filter_text(brand: str | None, category: str | None) -> str:
     return "; ".join(parts) if parts else "Все товары"
 
 
-def decimal_to_json(value: Decimal) -> int | float:
-    integral = value.to_integral_value()
-    if value == integral:
-        return int(integral)
-    return float(value)
-
-
-def find_artifact_runtime() -> tuple[Path, Path]:
-    node = Path(os.environ.get(NODE_EXE_ENV, str(DEFAULT_NODE_EXE)))
-    node_modules = Path(os.environ.get(NODE_MODULES_ENV, str(DEFAULT_NODE_MODULES)))
-    if not node.exists():
-        raise ReportError(
-            f"Не найден Node.js runtime для @oai/artifact-tool: {node}. "
-            f"Можно задать {NODE_EXE_ENV}."
-        )
-    if not (node_modules / "@oai" / "artifact-tool").exists():
-        raise ReportError(
-            f"Не найден @oai/artifact-tool в {node_modules}. "
-            f"Можно задать {NODE_MODULES_ENV}."
-        )
-    return node, node_modules
-
-
-BUILDER_SOURCE = r'''
-import fs from "node:fs/promises";
-import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
-
-const [dataPath] = process.argv.slice(2);
-const data = JSON.parse(await fs.readFile(dataPath, "utf8"));
-const contract = data.contract;
-const workbook = Workbook.create();
-const parameters = workbook.worksheets.add(contract.parametersSheet);
-const sheet = workbook.worksheets.add(contract.reportSheet);
-parameters.showGridLines = false;
-sheet.showGridLines = false;
-
-function localDate(value) {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
-}
-
-parameters.mergeCells("A1:D1");
-parameters.getRange("A1").values = [["Параметры отчёта"]];
-parameters.getRange("A3:D3").values = [["Период для следующего обновления", "", "", ""]];
-parameters.getRange("A4").values = [["Дата начала"]];
-parameters.getRange("A5").values = [["Дата окончания"]];
-parameters.getRange(contract.requestedStartCell).values = [[localDate(data.requestedStart)]];
-parameters.getRange(contract.requestedEndCell).values = [[localDate(data.requestedEnd)]];
-parameters.getRange("A7:D7").values = [["Последнее успешное обновление", "", "", ""]];
-parameters.getRange("A8").values = [["Начало загруженного периода"]];
-parameters.getRange("A9").values = [["Конец загруженного периода"]];
-parameters.getRange("A10").values = [["Дата и время обновления"]];
-parameters.getRange(contract.loadedStartCell).values = [[localDate(data.loadedStart)]];
-parameters.getRange(contract.loadedEndCell).values = [[localDate(data.loadedEnd)]];
-parameters.getRange(contract.lastSuccessfulUpdateCell).values = [[new Date(data.generatedAt)]];
-parameters.mergeCells("A12:D12");
-parameters.getRange("A12").values = [["После изменения дат сохраните и закройте книгу, затем запустите «Обновить отчёт»."]];
-
-parameters.getRange("A1:D12").format.font = {name: "Arial", color: "#1F2937", size: 11};
-parameters.getRange("A1").format.font = {name: "Arial", bold: true, color: "#1F2937", size: 16};
-for (const rangeAddress of ["A3:D3", "A7:D7"]) {
-  parameters.getRange(rangeAddress).format = {
-    fill: "#E8EEF7",
-    font: {name: "Arial", bold: true, color: "#1F2937"},
-    borders: {preset: "outside", style: "thin", color: "#B8C2D1"},
-  };
-}
-parameters.getRange("A4:A5").format.font = {name: "Arial", bold: true, color: "#1F2937"};
-parameters.getRange("B4:B5").format = {
-  fill: "#FFF2CC",
-  font: {name: "Arial", bold: true, color: "#1F2937"},
-  horizontalAlignment: "center",
-  borders: {preset: "all", style: "thin", color: "#A67C00"},
-};
-parameters.getRange("B4:B5").setNumberFormat(contract.dateNumberFormat);
-parameters.getRange("B8:B9").setNumberFormat(contract.dateNumberFormat);
-parameters.getRange("B10").setNumberFormat(contract.dateTimeNumberFormat);
-parameters.getRange("B8:B10").format.fill = "#F3F4F6";
-parameters.getRange("A12:D12").format = {
-  fill: "#FFF8E1",
-  font: {name: "Arial", color: "#7A5200", italic: true},
-  wrapText: true,
-  verticalAlignment: "center",
-  borders: {preset: "outside", style: "thin", color: "#D6B656"},
-};
-parameters.getRange("A12:D12").format.rowHeight = 34;
-parameters.getRange("A:A").format.columnWidth = 34;
-parameters.getRange("B:B").format.columnWidth = 20;
-parameters.getRange("C:D").format.columnWidth = 12;
-
-sheet.mergeCells(`A1:${contract.lastColumn}1`);
-sheet.mergeCells("A3:B3");
-sheet.getRange("A1").values = [["Отчет движения товара"]];
-sheet.getRange("A3").values = [["Фактический период"]];
-sheet.getRange(contract.reportLoadedStartCell).values = [[localDate(data.loadedStart)]];
-sheet.getRange("D3").values = [["—"]];
-sheet.getRange(contract.reportLoadedEndCell).values = [[localDate(data.loadedEnd)]];
-sheet.getRange("A5").values = [["Фильтр при формировании"]];
-sheet.getRange("C5").values = [[data.filterText]];
-for (const group of contract.groupHeaders) {
-  sheet.mergeCells(group.range);
-  sheet.getRange(group.cell).values = [[group.label]];
-}
-sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).values = [contract.headers];
-
-const matrix = data.rows.map(row => [
-  row.number,
-  row.category,
-  row.brand,
-  row.nmi_id,
-  row.nomenclature_name,
-  row.opening_quantity,
-  row.opening_amount,
-  row.intake_quantity,
-  row.intake_amount,
-  row.ending_quantity,
-  row.ending_amount,
-]);
-if (matrix.length) {
-  sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.tableEndRow}`).values = matrix;
-} else {
-  sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.firstDataRow}`).values = [contract.headers.map(() => null)];
-}
-
-const inventoryTable = sheet.tables.add(
-  `A${contract.headerRow}:${contract.lastColumn}${contract.tableEndRow}`,
-  true,
-  contract.tableName,
-);
-inventoryTable.style = "TableStyleMedium2";
-inventoryTable.showFilterButton = true;
-inventoryTable.showTotals = false;
-
-const totalLabelCells = Array(contract.headers.length - contract.totalColumns.length).fill("");
-totalLabelCells[0] = "ИТОГО";
-sheet.getRange(`A${contract.totalRow}:${contract.totalLabelEndColumn}${contract.totalRow}`).values = [totalLabelCells];
-sheet.getRange(`${contract.totalColumns[0]}${contract.totalRow}:${contract.lastColumn}${contract.totalRow}`).formulas = [[
-  ...contract.totalColumns.map(column => contract.totalFormulas[column]),
-]];
-
-const usedEnd = contract.totalRow;
-sheet.getRange(`A1:${contract.lastColumn}${usedEnd}`).format.fill = "#FFFFFF";
-sheet.getRange(`A1:${contract.lastColumn}${usedEnd}`).format.font = {name: "Arial", color: "#1F2937", size: 11};
-sheet.getRange("A1").format.font = {name: "Arial", bold: true, color: "#1F2937", size: 18};
-sheet.getRange("A3:E3").format.verticalAlignment = "center";
-sheet.getRange("A3").format.font = {name: "Arial", bold: true, color: "#1F2937"};
-sheet.getRange("C3").setNumberFormat(contract.dateNumberFormat);
-sheet.getRange("E3").setNumberFormat(contract.dateNumberFormat);
-sheet.getRange("A5").format.font = {name: "Arial", bold: true, color: "#1F2937"};
-sheet.getRange(`${contract.totalColumns[0]}7:${contract.lastColumn}7`).format = {
-  fill: "#E8EEF7",
-  font: {name: "Arial", bold: true, color: "#1F2937"},
-  horizontalAlignment: "center",
-  verticalAlignment: "center",
-  wrapText: true,
-  borders: {preset: "outside", style: "thin", color: "#B8C2D1"},
-};
-sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).format = {
-  fill: "#4472C4",
-  font: {name: "Arial", bold: true, color: "#FFFFFF"},
-  horizontalAlignment: "center",
-  verticalAlignment: "center",
-  wrapText: true,
-  borders: {preset: "all", style: "thin", color: "#FFFFFF"},
-};
-sheet.getRange(`A${contract.headerRow}:${contract.lastColumn}${contract.headerRow}`).format.rowHeight = 42;
-
-const dataRange = sheet.getRange(`A${contract.firstDataRow}:${contract.lastColumn}${contract.tableEndRow}`);
-dataRange.format.verticalAlignment = "top";
-sheet.getRange(`A${contract.firstDataRow}:A${contract.tableEndRow}`).format.horizontalAlignment = "center";
-sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.horizontalAlignment = "center";
-for (const column of contract.wrappedTextColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.wrapText = true;
-for (const column of contract.quantityColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.###";
-for (const column of contract.amountColumns) sheet.getRange(`${column}${contract.firstDataRow}:${column}${contract.tableEndRow}`).format.numberFormat = "#,##0.00";
-sheet.getRange(`D${contract.firstDataRow}:D${contract.tableEndRow}`).format.numberFormat = "0";
-if (matrix.length) {
-  data.rows.forEach((row, index) => {
-    const categoryLines = Math.max(1, Math.ceil(String(row.category || "").length / 42));
-    const brandLines = Math.max(1, Math.ceil(String(row.brand || "").length / 20));
-    const nomenclatureLines = Math.max(1, Math.ceil(String(row.nomenclature_name || "").length / 46));
-    const lines = Math.max(categoryLines, brandLines, nomenclatureLines);
-    sheet.getRange(`A${contract.firstDataRow + index}:${contract.lastColumn}${contract.firstDataRow + index}`).format.rowHeight = Math.max(19, lines * 15);
-  });
-}
-
-sheet.getRange(`A${contract.totalRow}:${contract.lastColumn}${contract.totalRow}`).format = {
-  fill: "#D9E2F3",
-  font: {name: "Arial", bold: true, color: "#1F2937"},
-  borders: {preset: "all", style: "thin", color: "#9EADBF"},
-};
-sheet.getRange(`A${contract.totalRow}:${contract.totalLabelEndColumn}${contract.totalRow}`).format.horizontalAlignment = "right";
-for (const column of contract.quantityColumns) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.###";
-for (const column of contract.amountColumns) sheet.getRange(`${column}${contract.totalRow}`).format.numberFormat = "#,##0.00";
-
-const widths = {A: 7, B: 34, C: 20, D: 15, E: 42, F: 17, G: 17, H: 17, I: 17, J: 17, K: 17};
-for (const [column, width] of Object.entries(widths)) sheet.getRange(`${column}:${column}`).format.columnWidth = width;
-sheet.freezePanes.freezeRows(contract.headerRow);
-
-let noteRow = contract.totalRow + 2;
-for (const note of data.notes) {
-  sheet.mergeCells(`A${noteRow}:${contract.lastColumn}${noteRow}`);
-  sheet.getRange(`A${noteRow}`).values = [[note]];
-  sheet.getRange(`A${noteRow}:${contract.lastColumn}${noteRow}`).format = {
-    fill: "#FFFFFF",
-    font: {color: "#000000", italic: true},
-    wrapText: true,
-    verticalAlignment: "top",
-  };
-  sheet.getRange(`A${noteRow}:${contract.lastColumn}${noteRow}`).format.rowHeight = 30;
-  noteRow += 1;
-}
-
-const output = await SpreadsheetFile.exportXlsx(workbook);
-await output.save(data.outputPath);
-'''
-
-
-def create_runtime_junction(junction: Path, target: Path) -> None:
-    completed = subprocess.run(
-        ["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise ReportError(f"Не удалось подключить @oai/artifact-tool: {clean_text(completed.stderr or completed.stdout)}")
-
-
-def remove_runtime_junction(junction: Path) -> None:
-    if not junction.exists():
-        return
-    completed = subprocess.run(
-        ["cmd.exe", "/d", "/c", "rmdir", str(junction)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise ReportError(f"Не удалось удалить временное подключение node_modules: {junction}")
-
-
 def write_workbook(
     output_path: Path,
     start: date,
@@ -1307,72 +1047,14 @@ def write_workbook(
     applied_filter: str,
     notes: list[str],
 ) -> None:
-    node, node_modules = find_artifact_runtime()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_root = Path(tempfile.mkdtemp(prefix="inventory_movement_report_"))
-    junction = temp_root / "node_modules"
-    exported_workbook = temp_root / output_path.name
-    try:
-        create_runtime_junction(junction, node_modules)
-        builder = temp_root / "build_report.mjs"
-        data_path = temp_root / "report_data.json"
-        builder.write_text(textwrap.dedent(BUILDER_SOURCE), encoding="utf-8")
-        payload = {
-            "requestedStart": start.isoformat(),
-            "requestedEnd": end.isoformat(),
-            "loadedStart": start.isoformat(),
-            "loadedEnd": end.isoformat(),
-            "generatedAt": datetime.now().replace(microsecond=0).isoformat(),
-            "filterText": applied_filter,
-            "rows": [
-                {
-                    "number": item["number"],
-                    "category": item["category"],
-                    "brand": clean_text(item.get("brand") or ""),
-                    "nmi_id": item["nmi_id"],
-                    "nomenclature_name": clean_text(item["nomenclature_name"]),
-                    "opening_quantity": decimal_to_json(item["opening_quantity"]),
-                    "opening_amount": decimal_to_json(item["opening_amount"]),
-                    "intake_quantity": decimal_to_json(item["intake_quantity"]),
-                    "intake_amount": decimal_to_json(item["intake_amount"]),
-                    "ending_quantity": decimal_to_json(item["ending_quantity"]),
-                    "ending_amount": decimal_to_json(item["ending_amount"]),
-                }
-                for item in rows
-            ],
-            "notes": notes,
-            "contract": workbook_contract_payload(
-                data_row_count=len(rows)
-            ),
-            "outputPath": str(exported_workbook),
-        }
-        data_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        completed = subprocess.run(
-            [str(node), str(builder), str(data_path)],
-            cwd=temp_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise ReportError(
-                "@oai/artifact-tool не смог сформировать XLSX: "
-                + clean_text(completed.stderr or completed.stdout)
-            )
-        try:
-            exported_metadata = exported_workbook.stat()
-        except FileNotFoundError as error:
-            raise ReportError(
-                "@oai/artifact-tool не создал итоговый XLSX."
-            ) from error
-        if not stat.S_ISREG(
-            exported_metadata.st_mode
-        ):
-            raise ReportError("@oai/artifact-tool не создал итоговый XLSX.")
-        exported_workbook.replace(output_path)
-    finally:
-        remove_runtime_junction(junction)
-        shutil.rmtree(temp_root)
+    write_inventory_workbook(
+        output_path,
+        start,
+        end,
+        rows,
+        applied_filter,
+        notes,
+    )
 
 
 def column_index(cell_ref: str) -> int:

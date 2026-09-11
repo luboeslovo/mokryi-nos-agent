@@ -2,9 +2,11 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+
+from openpyxl import load_workbook
 
 
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
@@ -80,17 +82,26 @@ class InventoryWorkbookContractTests(unittest.TestCase):
         self.assertNotIn('<c r="B4" t="inlineStr">', parameters_xml)
         self.assertNotIn('<c r="B5" t="inlineStr">', parameters_xml)
 
-    def test_builder_writes_requested_dates_as_date_objects(self):
-        self.assertIn(
-            "parameters.getRange(contract.requestedStartCell).values = "
-            "[[localDate(data.requestedStart)]];",
-            report.BUILDER_SOURCE,
-        )
-        self.assertIn(
-            "parameters.getRange(contract.requestedEndCell).values = "
-            "[[localDate(data.requestedEnd)]];",
-            report.BUILDER_SOURCE,
-        )
+    def test_writer_writes_requested_dates_as_date_objects(self):
+        with tempfile.TemporaryDirectory() as temp_root:
+            path = Path(temp_root) / "report.xlsx"
+            report.write_workbook(
+                path,
+                date(2026, 8, 1),
+                date(2026, 8, 18),
+                default_rows(1),
+                "Все товары",
+                [],
+            )
+            workbook = load_workbook(path, data_only=False)
+            parameters = workbook[PARAMETERS_SHEET_NAME]
+            start_cell = parameters["B4"]
+            end_cell = parameters["B5"]
+
+        self.assertIsInstance(start_cell.value, (date, datetime))
+        self.assertIsInstance(end_cell.value, (date, datetime))
+        self.assertTrue(start_cell.is_date)
+        self.assertTrue(end_cell.is_date)
 
     def test_invalid_reversed_and_future_requested_dates_are_rejected(self):
         scenarios = [
