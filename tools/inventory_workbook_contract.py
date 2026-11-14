@@ -195,6 +195,8 @@ def _worksheet_cells(
     )
     shared = _shared_strings(archive)
     cells: dict[str, tuple[str | None, str, int | None]] = {}
+    for cell in sheet_xml.findall(".//m:c", ns):
+        ref = cell.attrib.get("r")
         if not ref:
             continue
         cell_type = cell.attrib.get("t")
