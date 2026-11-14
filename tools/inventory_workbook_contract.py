@@ -33,8 +33,8 @@ REPORT_TOTAL_LABEL_END_COLUMN = "E"
 REPORT_HEADERS = (
     "№",
     "Категория",
-    "Бренд",
     "Артикул ИТ",
+    "Бренд",
     "Название номенклатуры",
     "Остаток на начало, количество",
     "Остаток на начало, сумма",
@@ -57,8 +57,8 @@ REPORT_REQUIRED_MERGES = (
 TOTAL_COLUMNS = ("F", "G", "H", "I", "J", "K")
 QUANTITY_COLUMNS = ("F", "H", "J")
 AMOUNT_COLUMNS = ("G", "I", "K")
-NUMERIC_COLUMNS = ("A", "D", *TOTAL_COLUMNS)
-WRAPPED_TEXT_COLUMNS = ("B", "C", "E")
+NUMERIC_COLUMNS = ("A", "C", *TOTAL_COLUMNS)
+WRAPPED_TEXT_COLUMNS = ("B", "D", "E")
 
 MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 OFFICE_REL_NS = (

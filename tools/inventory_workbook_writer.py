@@ -211,8 +211,8 @@ def _write_report_sheet(
         values = (
             _excel_number(row["number"]),
             row["category"],
-            _clean_text(row.get("brand")),
             _excel_number(row["nmi_id"]),
+            _clean_text(row.get("brand")),
             _clean_text(row["nomenclature_name"]),
             _excel_number(row["opening_quantity"]),
             _excel_number(row["opening_amount"]),
@@ -303,7 +303,7 @@ def _write_report_sheet(
     )
     _style_cells(
         worksheet,
-        f"D{REPORT_FIRST_DATA_ROW}:D{table_last_row}",
+        f"C{REPORT_FIRST_DATA_ROW}:C{table_last_row}",
         alignment=Alignment(horizontal="center", vertical="top"),
     )
     for column in WRAPPED_TEXT_COLUMNS:
@@ -319,7 +319,7 @@ def _write_report_sheet(
         for row_number in range(REPORT_FIRST_DATA_ROW, table_last_row + 1):
             worksheet[f"{column}{row_number}"].number_format = "#,##0.00"
     for row_number in range(REPORT_FIRST_DATA_ROW, table_last_row + 1):
-        worksheet[f"D{row_number}"].number_format = "0"
+        worksheet[f"C{row_number}"].number_format = "0"
 
     for offset, row in enumerate(rows):
         row_number = REPORT_FIRST_DATA_ROW + offset
@@ -354,8 +354,8 @@ def _write_report_sheet(
     widths = {
         "A": 7,
         "B": 34,
-        "C": 20,
-        "D": 15,
+        "C": 15,
+        "D": 20,
         "E": 42,
         "F": 17,
         "G": 17,
