@@ -332,8 +332,6 @@ def read_inventory_workbook_state(
     )
 
     for ref in (
-        REQUESTED_START_CELL,
-        REQUESTED_END_CELL,
         LOADED_START_CELL,
         LOADED_END_CELL,
     ):
