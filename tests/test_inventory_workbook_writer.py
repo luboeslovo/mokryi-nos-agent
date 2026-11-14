@@ -172,8 +172,8 @@ class InventoryWorkbookWriterTests(unittest.TestCase):
                     expected_widths = {
                         "A": 7,
                         "B": 34,
-                        "C": 20,
-                        "D": 15,
+                        "C": 15,
+                        "D": 20,
                         "E": 42,
                         "F": 17,
                         "G": 17,
@@ -209,7 +209,7 @@ class InventoryWorkbookWriterTests(unittest.TestCase):
                         )
                     else:
                         self.assertEqual(
-                            report_sheet[f"C{REPORT_FIRST_DATA_ROW}"].value,
+                            report_sheet[f"D{REPORT_FIRST_DATA_ROW}"].value,
                             rows[0]["brand"],
                         )
                         self.assertEqual(

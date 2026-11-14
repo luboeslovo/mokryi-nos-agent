@@ -111,8 +111,8 @@ def write_inventory_workbook_fixture(
         values = [
             item["number"],
             item["category"],
-            item["brand"],
             item["nmi_id"],
+            item["brand"],
             item["nomenclature_name"],
             item["opening_quantity"],
             item["opening_amount"],
