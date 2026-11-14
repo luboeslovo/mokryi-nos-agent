@@ -333,19 +333,6 @@ def read_inventory_workbook_state(
         "Последнее успешное обновление",
     )
 
-    for ref in (
-        LOADED_START_CELL,
-        LOADED_END_CELL,
-    ):
-        if date_formats[ref] != DATE_NUMBER_FORMAT:
-            raise WorkbookContractError(
-                f"Ячейка {PARAMETERS_SHEET_NAME}!{ref} не имеет формата даты."
-            )
-    if date_formats[LAST_SUCCESSFUL_UPDATE_CELL] != DATETIME_NUMBER_FORMAT:
-        raise WorkbookContractError(
-            f"Ячейка {PARAMETERS_SHEET_NAME}!{LAST_SUCCESSFUL_UPDATE_CELL} "
-            "не имеет формата даты и времени."
-        )
 
     validate_requested_period(
         requested_start,
